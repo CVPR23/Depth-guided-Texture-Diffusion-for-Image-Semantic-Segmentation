@@ -1,0 +1,7 @@
+visualizer:
+  type: Visualizer
+  vis_backends:
+    -
+      type: ClearMLVisBackend
+      init_kwargs: 
+        project_name: COD

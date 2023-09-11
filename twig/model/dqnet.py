@@ -74,6 +74,17 @@ class DQnet(BaseModel):
         w, h = box[2] - box[0], box[3] - box[1]
         ax.add_patch(plt.Rectangle((x0, y0), w, h, edgecolor='green', facecolor=(0,0,0,0), lw=2)) 
 
+    def cal_loss(self, preds: torch.Tensor, gts: torch.Tensor):
+        weit = 1 + 5*torch.abs(F.avg_pool2d(gts, kernel_size=31, stride=1, padding=15) - gts)
+        wbce = F.binary_cross_entropy_with_logits(preds, gts, reduction='none')
+        wbce = (weit*wbce).sum(dim=(2, 3)) / weit.sum(dim=(2, 3))
+
+        preds = torch.sigmoid(preds)
+        inter = ((preds * gts)*weit).sum(dim=(2, 3))
+        union = ((preds + gts)*weit).sum(dim=(2, 3))
+        wiou = 1 - (inter + 1)/(union - inter+1)
+        return (wbce + wiou).mean()
+
     def show_mask(self, mask, ax, random_color=False):
         if random_color:
             color = np.concatenate([np.random.random(3), np.array([0.6])], axis=0)
@@ -1443,7 +1454,7 @@ class PyramidVisionTransformerImpr(nn.Module):
         #     depth[i] = d.permute(0,2,3,1).reshape(b,H*W,c)
 
         for i, blk in enumerate(self.block1):
-            # if True:#i == self.depths[0]-1:
+            if True:#i == self.depths[0]-1:
             #     fused = self.cross[0](depth[i].reshape(x.shape), x)[0]
             #     B,C,H,W = fused.shape
             #     fused = fused.reshape(B,C,H*W).permute(0,2,1)
@@ -1708,7 +1719,7 @@ class WindowFusion(nn.Module):
 
 
 
-        return x+identity+identity_y, x.sigmoid()#bias
+        return x*identity+identity_y, x.sigmoid()#bias
 
 
 
