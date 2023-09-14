@@ -10,14 +10,14 @@ import torch
 class COD10K_TEST(Dataset):
     """Load data for COD testing on testing set of COD10K"""
 
-    def __init__(self, data_dir: str, split: str, image_size: Optional[Union[tuple, list]] = None):
+    def __init__(self, data_dir: str, depth_dir: str, split: str, image_size: Optional[Union[tuple, list]] = None):
         self.trainsize = 704#384
         if split == 'train':
             raise ValueError(f'The testing set of COD10K is usually used for testing') 
         elif split == 'test' or split == 'val':
             self.images = [os.path.join(data_dir, 'Image', f) for f in os.listdir(os.path.join(data_dir, 'Image'))]
             self.gts = [os.path.join(data_dir, 'GT', f) for f in os.listdir(os.path.join(data_dir, 'GT'))]   
-            self.depth = [os.path.join(data_dir, 'Depth_kitti_linear_large', f) for f in os.listdir(os.path.join(data_dir, 'Depth_kitti_linear_large'))]
+            self.depth = [os.path.join(data_dir, depth_dir, f) for f in os.listdir(os.path.join(data_dir, depth_dir))]
             # depth_dir = '/root/autodl-tmp/sw/workspace/dqnet-depth-nest/Metric3D-main/show_dirs/convlarge.0.3_150/20230901_205947/vis/cod10k_test'
         else:
             raise NotImplementedError(f'Unsupported split {split}')           

@@ -33,7 +33,7 @@ import mmseg
 
 
 @export
-class DQnet(BaseModel):
+class backup_DQnet(BaseModel):
     """DQnet model"""
     def __init__(self, win_size: Optional[int]=None, filter_ratio: Optional[float]=None, 
                  using_depth: Optional[bool]=None, using_sam: Optional[bool]=None,
@@ -155,369 +155,11 @@ class DQnet(BaseModel):
             raise NotImplementedError(f'Unsupported mode {mode}')
         
 
-# ResNet
-class ResNet(timm.models.resnet.ResNet):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)  
-        self.cross0 = WindowFusion(768) 
-        self.cross1 = WindowFusion(768)
-        self.cross2 = WindowFusion(768)
-        self.cross3 = WindowFusion(768)  
-
-        self.convert0 = nn.Sequential(
-            # nn.Conv2d(768, 64, 1)
-            nn.ConvTranspose2d(768, 64, kernel_size=2, stride=2),
-            nn.BatchNorm2d(64),
-            nn.ReLU(),
-            nn.ConvTranspose2d(64, 64, kernel_size=2, stride=2),
-        )
-        self.convert1 = nn.Sequential(
-            # nn.Conv2d(768, 256, 1)
-            nn.ConvTranspose2d(768, 256, kernel_size=2, stride=2),
-            nn.BatchNorm2d(256),
-            nn.ReLU(),
-            nn.ConvTranspose2d(256, 256, kernel_size=2, stride=2),
-        )
-        self.convert2 = nn.ConvTranspose2d(768, 512, kernel_size=2, stride=2)#nn.Conv2d(768, 512, 1)#
-        self.convert3 = nn.Conv2d(768, 1024, kernel_size=1, stride=1, padding=0)
-        self.relu = nn.ReLU()
-        del self.fc      
-        self.proj0 = nn.Sequential(nn.MaxPool2d(kernel_size=4, stride=4), nn.Conv2d(64, 768, kernel_size=1, stride=1, padding=0))
-        self.proj1 = nn.Sequential(nn.MaxPool2d(kernel_size=4, stride=4), nn.Conv2d(256, 768, kernel_size=1, stride=1, padding=0))
-        self.proj2 = nn.Sequential(nn.MaxPool2d(kernel_size=2, stride=2), nn.Conv2d(512, 768, kernel_size=1, stride=1, padding=0))
-        self.proj3 = nn.Sequential(nn.Conv2d(1024, 768, kernel_size=1, stride=1, padding=0))     
-        self.norm0 = nn.LayerNorm(768)
-        self.norm1 = nn.LayerNorm(768)
-        self.norm2 = nn.LayerNorm(768)
-        self.norm3 = nn.LayerNorm(768)
-        self.pos_norm0 = nn.BatchNorm2d(64)
-        self.pos_norm1 = nn.BatchNorm2d(256)
-        self.pos_norm2 = nn.BatchNorm2d(512)
-        self.pos_norm3 = nn.BatchNorm2d(1024)
-
-    def forward_features(self, x, y):
-        features = []
-        atts = []
-        x = self.conv1(x)
-        x = self.bn1(x)
-        x = self.act1(x)
-        features.append(x)
-        x = self.maxpool(x) #c=64
-
-        # # patch embed -> cross attention
-        ys = [y.flatten(2).transpose(1,2) for i in range(4)]#[yy.flatten(2).transpose(1,2) for yy in y] # 16, 576, 768
-        # ys =  self.c_verter(y)
-        # ys = F.interpolate(ys, scale_factor=2)
-        # ys = ys.flatten(2).transpose(1,2)
-        xx = self.proj0(x)
-        xx = xx.flatten(2).transpose(1, 2)
-        xx = self.norm0(xx) # 20, 576, 768
-        b,hh,c = xx.shape
-        h = int(math.sqrt(hh))
-
-        # cr, att = self.cross0(xx, ys[3])#ys[3], xx)#
-        # atts.append(att)
-        feat0 = self.relu(self.pos_norm0(self.convert0(y)))#cr)))
-        x = self.layer1(feat0)
-        features.append(x)
-
-        # xx = self.proj1(x)
-        # xx = xx.flatten(2).transpose(1, 2)
-        # xx = self.norm1(xx)
-        # cr, att = self.cross1(xx, ys[3])#
-        # atts.append(att)
-        feat1 = self.relu(self.pos_norm1(self.convert1(y)))#cr)))
-        x = self.layer2(feat1)
-        features.append(x)
-
-        # xx = self.proj2(x)
-        # xx = xx.flatten(2).transpose(1, 2)
-        # xx = self.norm2(xx)      
-        # cr, att = self.cross2(xx, ys[3])#ys[3], xx)#
-        # atts.append(att)
-        feat2 = self.relu(self.pos_norm2(self.convert2(y)))#cr)))
-        x = self.layer3(feat2)
-        features.append(x)
-
-        # xx = self.proj3(x)
-        # xx = xx.flatten(2).transpose(1, 2)
-        # xx = self.norm3(xx)      
-        # cr, att = self.cross3(xx, ys[3])#xx, ys[3])#ys[3], xx)#
-        # atts.append(att)
-        feat3 = self.relu(self.pos_norm3(self.convert3(y)))#cr)))
-        x = self.layer4(feat3)
-        features.append(x)
-
-        return features
-    
-    def forward_plus(self, x, y):
-        features = []
-        atts = []
-        x = self.conv1(x)
-        x = self.bn1(x)
-        x = self.act1(x)
-        features.append(x)
-        x = self.maxpool(x) #c=64
-
-        # # patch embed -> cross attention
-        # ys = [y.flatten(2).transpose(1,2) for i in range(4)]#[yy.flatten(2).transpose(1,2) for yy in y] # 16, 576, 768
-        # ys =  self.c_verter(y)
-        # ys = F.interpolate(ys, scale_factor=2)
-        # ys = ys.flatten(2).transpose(1,2)
-        xx = self.proj0(x)
-        xx = xx.flatten(2).transpose(1, 2)
-        xx = self.norm0(xx) # 20, 576, 768
-        b,hh,c = xx.shape
-        h = int(math.sqrt(hh))
-
-        # cr, att = self.cross0(xx, ys[3])#ys[3], xx)#
-        # atts.append(att)
-        feat0 = self.relu(self.pos_norm0(self.convert0(y[0])))#cr)))
-        x = self.layer1(feat0)
-        features.append(x)
-
-        # xx = self.proj1(x)
-        # xx = xx.flatten(2).transpose(1, 2)
-        # xx = self.norm1(xx)
-        # cr, att = self.cross1(xx, ys[3])#
-        # atts.append(att)
-        feat1 = self.relu(self.pos_norm1(self.convert1(y[0])))#cr)))
-        x = self.layer2(feat1)
-        features.append(x)
-
-        # xx = self.proj2(x)
-        # xx = xx.flatten(2).transpose(1, 2)
-        # xx = self.norm2(xx)      
-        # cr, att = self.cross2(xx, ys[3])#ys[3], xx)#
-        # atts.append(att)
-        feat2 = self.relu(self.pos_norm2(self.convert2(y[1])))#cr)))
-        x = self.layer3(feat2)
-        features.append(x)
-
-        # xx = self.proj3(x)
-        # xx = xx.flatten(2).transpose(1, 2)
-        # xx = self.norm3(xx)      
-        # cr, att = self.cross3(xx, ys[3])#xx, ys[3])#ys[3], xx)#
-        # atts.append(att)
-        feat3 = self.relu(self.pos_norm3(self.convert3(y[2])))#cr)))
-        x = self.layer4(feat3)
-        features.append(x)
-
-        return features
-        
-    def forward(self, x, y=None, z=None, mode=None):
-        if mode=='double':
-            features = self.forward_features(x, y)#self.forward_plus(x, y)#
-        elif mode=='single':
-            features = self.plain_forward(x)
-        elif mode=='triple':
-            features = self.forward_depth(x, y, z)
-        return features
-
-def resnet50(**kwargs):
-    model = ResNet(
-        block=Bottleneck, layers=[3, 4, 6, 3],  
-        **kwargs
-    )
-    pretrain = 'pretrain/resnet50_pretrain.pth' 
-    checkpoint = torch.load(pretrain, map_location='cpu')
-
-    print("Load pre-trained checkpoint from: %s" % pretrain)
-    if 'model' in checkpoint:
-        checkpoint = checkpoint['model']
-
-    # load pre-trained model
-    import copy
-    model_old = copy.deepcopy(model)
-    msg = model.load_state_dict(checkpoint, strict=False)
-    print(msg)
-    return model
-
-
-
-class WindowFusion(nn.Module):
-    """ Window based multi-head self attention (W-MSA) module with relative position bias.
-    It supports both of shifted and non-shifted window.
-    Args:
-        dim (int): Number of input channels.
-        window_size (tuple[int]): The height and width of the window.
-        num_heads (int): Number of attention heads.
-        qkv_bias (bool, optional):  If True, add a learnable bias to query, key, value. Default: True
-        qk_scale (float | None, optional): Override default qk scale of head_dim ** -0.5 if set
-        attn_drop (float, optional): Dropout ratio of attention weight. Default: 0.0
-        proj_drop (float, optional): Dropout ratio of output. Default: 0.0
-    """
-
-    def __init__(self, dim, window_size=(24, 24), num_heads=8, qkv_bias=True, qk_scale=None, attn_drop=0., proj_drop=0., attn_head_dim=None):
-
-        super().__init__()
-        self.dim = dim
-        self.window_size = window_size  # Wh, Ww
-        self.num_heads = num_heads
-        head_dim = dim // num_heads
-        self.scale = qk_scale or head_dim ** -0.5
-
-        q_size = window_size[0]
-        # kv_size = window_size[1]
-        rel_sp_dim = 2 * q_size - 1
-        self.rel_pos_h = nn.Parameter(torch.zeros(rel_sp_dim, head_dim))
-        self.rel_pos_w = nn.Parameter(torch.zeros(rel_sp_dim, head_dim))
-
-        self.q = nn.Linear(dim, dim, bias=qkv_bias)
-        self.kv = nn.Linear(dim, dim*2, bias=qkv_bias)    
-        # self.att_project = nn.Linear(num_heads, 1)    
-        self.attn_drop = nn.Dropout(attn_drop)
-        self.proj = nn.Linear(dim, dim)
-        self.proj_drop = nn.Dropout(proj_drop)
-
-        # trunc_normal_(self.relative_position_bias_table, std=.02)
-        self.softmax = nn.Softmax(dim=-1)
-
-
-    def forward(self, x,y):
-        """ Forward function.
-        Args:
-            x: input features with shape of (num_windows*B, N, C)
-            mask: (0/-inf) mask with shape of (num_windows, Wh*Ww, Wh*Ww) or None
-        """
-
-        B_, N, C = x.shape
-        H= int(math.sqrt(N))
-        W= H
-        x = x.reshape(B_, H, W, C)
-        identity = x.permute(0,3,1,2)
-        y = y.reshape(B_, H, W, C)
-        identity_y = y.permute(0,3,1,2)
-        x = x
-
-        pad_l = pad_t = 0
-        pad_r = (self.window_size[1] - W % self.window_size[1]) % self.window_size[1]
-        pad_b = (self.window_size[0] - H % self.window_size[0]) % self.window_size[0]
-
-        x = F.pad(x, (0, 0, pad_l, pad_r, pad_t, pad_b))
-        y = F.pad(y, (0, 0, pad_l, pad_r, pad_t, pad_b))
-        _, Hp, Wp, _ = x.shape
-
-        x = window_partition(x, self.window_size[0])  # nW*B, window_size, window_size, C
-        y = window_partition(y, self.window_size[0])
-        x = x.view(-1, self.window_size[1] * self.window_size[0], C)  # nW*B, window_size*window_size, C
-        y = y.view(-1, self.window_size[1] * self.window_size[0], C)  # nW*B, window_size*window_size, C
-        B_w = x.shape[0]
-        N_w = x.shape[1]
-        q = self.q(y).reshape(B_w, N_w, 1, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
-        q = q[0]  # make torchscript happy (cannot use tensor as tuple)
-        kv = self.kv(y).reshape(B_w, N_w, 2, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4) # 
-        k, v = kv[0], kv[1] #nW*B, heads, window_size*window_size, C/heads(144,8,64,96)
-
-        q = q * self.scale
-        attn = (q @ k.transpose(-2, -1))
-
-        attn = calc_rel_pos_spatial(attn, q, self.window_size, self.window_size, self.rel_pos_h, self.rel_pos_w)
-
-        attn = self.softmax(attn)
-        attn = self.attn_drop(attn)
-
-        x = (attn @ v).transpose(1, 2).reshape(B_w, N_w, C)
-        x = self.proj(x)
-        x = self.proj_drop(x)
-
-        x = x.view(-1, self.window_size[1], self.window_size[0], C)
-        x = window_reverse(x, self.window_size[0], Hp, Wp)  # B H' W' C
-
-
-        if pad_r > 0 or pad_b > 0:
-            x = x[:, :H, :W, :].contiguous()
-
-        x = x.view(B_, H * W, C)
-        x = x.permute(0,2,1)
-        x = x.view(B_,C,H,W)
-
-
-
-        return x*(identity_y)+identity_y, x.sigmoid()
-
-
-
-def window_partition(x, window_size):
-    """
-    Args:
-        x: (B, H, W, C)
-        window_size (int): window size
-    Returns:
-        windows: (num_windows*B, window_size, window_size, C)
-    """
-    B, H, W, C = x.shape
-    x = x.view(B, H // window_size, window_size, W // window_size, window_size, C)
-    windows = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(-1, window_size, window_size, C)
-    return windows
-
-
-def window_reverse(windows, window_size, H, W):
-    """
-    Args:
-        windows: (num_windows*B, window_size, window_size, C)
-        window_size (int): Window size
-        H (int): Height of image
-        W (int): Width of image
-    Returns:
-        x: (B, H, W, C)
-    """
-    B = int(windows.shape[0] / (H * W / window_size / window_size))
-    x = windows.view(B, H // window_size, W // window_size, window_size, window_size, -1)
-    x = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(B, H, W, -1)
-    return x
-
-
-def calc_rel_pos_spatial(
-    attn,
-    q,
-    q_shape,
-    k_shape,
-    rel_pos_h,
-    rel_pos_w,
-    ):
-    """
-    Spatial Relative Positional Embeddings.
-    """
-    sp_idx = 0
-    q_h, q_w = q_shape
-    k_h, k_w = k_shape
-
-    # Scale up rel pos if shapes for q and k are different.
-    q_h_ratio = max(k_h / q_h, 1.0)
-    k_h_ratio = max(q_h / k_h, 1.0)
-    dist_h = (
-        torch.arange(q_h)[:, None] * q_h_ratio - torch.arange(k_h)[None, :] * k_h_ratio
-    )
-    dist_h += (k_h - 1) * k_h_ratio
-    q_w_ratio = max(k_w / q_w, 1.0)
-    k_w_ratio = max(q_w / k_w, 1.0)
-    dist_w = (
-        torch.arange(q_w)[:, None] * q_w_ratio - torch.arange(k_w)[None, :] * k_w_ratio
-    )
-    dist_w += (k_w - 1) * k_w_ratio
-
-    Rh = rel_pos_h[dist_h.long()]
-    Rw = rel_pos_w[dist_w.long()]
-
-    B, n_head, q_N, dim = q.shape
-
-    r_q = q[:, :, sp_idx:].reshape(B, n_head, q_h, q_w, dim)
-    rel_h = torch.einsum("byhwc,hkc->byhwk", r_q, Rh)
-    rel_w = torch.einsum("byhwc,wkc->byhwk", r_q, Rw)
-
-    attn[:, :, sp_idx:, sp_idx:] = (
-        attn[:, :, sp_idx:, sp_idx:].view(B, -1, q_h, q_w, k_h, k_w)
-        + rel_h[:, :, :, :, :, None]
-        + rel_w[:, :, :, :, None, :]
-    ).view(B, -1, q_h * q_w, k_h * k_w)
-
-    return attn
 
 
     
 @export
-class PretrainInitHook(Hook):
+class backup_PretrainInitHook(Hook):
     """Init with pretrained model"""
     priority = 'NORMAL'
 
@@ -1263,12 +905,12 @@ class Interpolate(nn.Module):
         return x
 
 class Depth_prompt(nn.Module):
-    def __init__(self, scale_factor, input_dim, embed_dim, depth):
+    def __init__(self, scale_factor, input_dim, embed_dim, depth, fusion=False):
         super(Depth_prompt, self).__init__()
         self.scale_factor = 2#scale_factor
         self.embed_dim = embed_dim
         self.depth = depth
-        self.input_dim = input_dim
+        self.input_dim = embed_dim#input_dim
 
         self.shared_mlp = nn.Linear(self.input_dim//self.scale_factor, self.embed_dim)
         # self.embedding_generator = nn.Sequential(
@@ -1279,19 +921,28 @@ class Depth_prompt(nn.Module):
         #     nn.GELU(),
         #     nn.Linear(self.input_dim//8, self.input_dim//self.scale_factor),#96->192
         # )
-        self.embedding_generator = nn.Sequential(
-            # nn.GELU(),
-            nn.Linear(1, self.input_dim),
-            nn.Linear(self.input_dim, self.input_dim//self.scale_factor)
-            # nn.Linear(1, self.embed_dim)
-        )
+        # self.embedding_generator = nn.Sequential(
+        #     # nn.GELU(),
+        #     nn.Linear(1, self.input_dim),
+        #     nn.Linear(self.input_dim, self.input_dim//self.scale_factor)
+        #     # nn.Linear(1, self.embed_dim)
+        # )
+        self.embedding_generator = nn.Linear(self.input_dim, self.input_dim//self.scale_factor)
+        self.depth_adapter = nn.Linear(1, self.input_dim//self.scale_factor)
+        
         # self.embedding_generator = nn.Linear(self.input_dim, self.input_dim//self.scale_factor)
+        self.fusion = fusion
         for i in range(self.depth):
             lightweight_mlp = nn.Sequential(
                 nn.Linear(self.input_dim//self.scale_factor, self.input_dim//self.scale_factor),
                 nn.GELU(),
             )
             setattr(self, 'lightweight_mlp_{}'.format(str(i)), lightweight_mlp)
+            if self.fusion == True:
+                cross = WindowFusion(self.embed_dim//self.scale_factor)
+                setattr(self, 'cross_{}'.format(str(i)), cross)
+
+
 
     def init_embeddings(self, x):
         x = x.permute(0,3,1,2).contiguous()
@@ -1300,14 +951,29 @@ class Depth_prompt(nn.Module):
         return self.embedding_generator(x)
 
 
-    def forward(self, depth):
-        N, C, H, W = depth.shape
-        depth_feature = depth.view(N, C, H*W).permute(0, 2, 1)
+    def forward(self, depth, cues, cross=False):
+        # N, C, H, W = depth.shape
+        # depth_feature = depth.view(N, C, H*W).permute(0, 2, 1)
+        depth_feature = depth
         depth_feature = self.embedding_generator(depth_feature)
+        N, C, H, W = cues.shape
+        cues = cues.view(N, C, H*W).permute(0, 2, 1)
         prompts = []
         for i in range(self.depth):
             lightweight_mlp = getattr(self, 'lightweight_mlp_{}'.format(str(i)))
-            prompt = lightweight_mlp(depth_feature)
+
+            # fused = self.cross[0](depth[i].reshape(x.shape), x)[0]
+            # B,C,H,W = fused.shape
+            # fused = fused.reshape(B,C,H*W).permute(0,2,1)
+            if self.fusion == True:
+                fuse = getattr(self, 'cross_{}'.format(str(i)))
+                # fused = fuse(depth_feature, self.depth_adapter(cues))
+                fused = fuse(depth_feature, self.depth_adapter(cues))[0]
+                B,C,H,W = fused.shape
+                fused = fused.reshape(B,C,H*W).permute(0,2,1)
+            else:
+                fused = depth_feature + self.depth_adapter(cues)
+            prompt = lightweight_mlp(fused)
             prompts.append(self.shared_mlp(prompt))
         return prompts  
 
@@ -1365,21 +1031,15 @@ class PyramidVisionTransformerImpr(nn.Module):
         self.norm4 = norm_layer(embed_dims[3])
 
         # depth prompt
-        self.dino_dim = 768
+        self.dino_dim = 64#768
         self.scale_factor = 4
         self.depth_generator = nn.ModuleList([
-            Depth_prompt(self.scale_factor, self.dino_dim, embed_dims[0], self.depths[0]),
-            Depth_prompt(self.scale_factor, self.dino_dim, embed_dims[1], self.depths[1]),
-            Depth_prompt(self.scale_factor, self.dino_dim, embed_dims[2], self.depths[2]),
-            Depth_prompt(self.scale_factor, self.dino_dim, embed_dims[3], self.depths[3]),
+            Depth_prompt(self.scale_factor, self.dino_dim, embed_dims[0], self.depths[0], True),
+            Depth_prompt(self.scale_factor, self.dino_dim, embed_dims[1], self.depths[1], True),
+            Depth_prompt(self.scale_factor, self.dino_dim, embed_dims[2], self.depths[2], True),
+            Depth_prompt(self.scale_factor, self.dino_dim, embed_dims[3], self.depths[3], True),
             ])
 
-        self.cross = nn.ModuleList([
-            WindowFusion(64),
-            WindowFusion(128),
-            WindowFusion(320),
-            WindowFusion(512),
-            ])
 
         self.apply(self._init_weights)
 
@@ -1445,7 +1105,7 @@ class PyramidVisionTransformerImpr(nn.Module):
         x, H, W = self.patch_embed1(x)
 
         depth = F.interpolate(pred_normal, size=(H,W), mode='bilinear')
-        depth = self.depth_generator[0](depth)
+        depth = self.depth_generator[0](x, depth)
         # for i, d in enumerate(depth):
         #     b,n,c = d.shape
         #     h = int(math.sqrt(n))
@@ -1454,12 +1114,11 @@ class PyramidVisionTransformerImpr(nn.Module):
         #     depth[i] = d.permute(0,2,3,1).reshape(b,H*W,c)
 
         for i, blk in enumerate(self.block1):
-            if True:#i == self.depths[0]-1:
-            #     fused = self.cross[0](depth[i].reshape(x.shape), x)[0]
-            #     B,C,H,W = fused.shape
-            #     fused = fused.reshape(B,C,H*W).permute(0,2,1)
-                
+            # fused = self.cross[0](depth[i].reshape(x.shape), x)[0]
+            # B,C,H,W = fused.shape
+            # fused = fused.reshape(B,C,H*W).permute(0,2,1)
             # x = blk(fused, H, W)
+
             x = blk(x+depth[i].reshape(x.shape), H, W) #10, 176^2, 64
         x = self.norm1(x)
         x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
@@ -1469,7 +1128,7 @@ class PyramidVisionTransformerImpr(nn.Module):
         x, H, W = self.patch_embed2(x)
 
         depth = F.interpolate(pred_normal, size=(H,W), mode='bilinear')
-        depth = self.depth_generator[1](depth)
+        depth = self.depth_generator[1](x, depth)
         # for i, d in enumerate(depth):
         #     b,n,c = d.shape
         #     h = int(math.sqrt(n))
@@ -1478,10 +1137,11 @@ class PyramidVisionTransformerImpr(nn.Module):
         #     depth[i] = d.permute(0,2,3,1).reshape(b,H*W,c)
         
         for i, blk in enumerate(self.block2):
-            #     fused = self.cross[1](depth[i].reshape(x.shape), x)[0]
-            #     B,C,H,W = fused.shape
-            #     fused = fused.reshape(B,C,H*W).permute(0,2,1)                
+            # fused = self.cross[1](depth[i].reshape(x.shape), x)[0]
+            # B,C,H,W = fused.shape
+            # fused = fused.reshape(B,C,H*W).permute(0,2,1)                
             # x = blk(fused, H, W)
+
             x = blk(x+depth[i].reshape(x.shape), H, W) #10, 88^2, 128
         x = self.norm2(x)
         x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
@@ -1491,7 +1151,7 @@ class PyramidVisionTransformerImpr(nn.Module):
         x, H, W = self.patch_embed3(x)
 
         depth = F.interpolate(pred_normal, size=(H,W), mode='bilinear')
-        depth = self.depth_generator[2](depth)
+        depth = self.depth_generator[2](x, depth)
         # for i, d in enumerate(depth):
         #     b,n,c = d.shape
         #     h = int(math.sqrt(n))
@@ -1500,10 +1160,11 @@ class PyramidVisionTransformerImpr(nn.Module):
         #     depth[i] = d.permute(0,2,3,1).reshape(b,H*W,c)
         
         for i, blk in enumerate(self.block3):
-            #     fused = self.cross[2](depth[i].reshape(x.shape), x)[0]
-            #     B,C,H,W = fused.shape
-            #     fused = fused.reshape(B,C,H*W).permute(0,2,1)              
+            # fused = self.cross[2](depth[i].reshape(x.shape), x)[0]
+            # B,C,H,W = fused.shape
+            # fused = fused.reshape(B,C,H*W).permute(0,2,1)              
             # x = blk(fused, H, W)
+
             x = blk(x+depth[i].reshape(x.shape), H, W) #10, 44^2, 320
         x = self.norm3(x)
         x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
@@ -1513,7 +1174,7 @@ class PyramidVisionTransformerImpr(nn.Module):
         x, H, W = self.patch_embed4(x)
 
         depth = F.interpolate(pred_normal, size=(H,W), mode='bilinear')
-        depth = self.depth_generator[3](depth)
+        depth = self.depth_generator[3](x, depth)
         # for i, d in enumerate(depth):
         #     b,n,c = d.shape
         #     h = int(math.sqrt(n))
@@ -1522,10 +1183,11 @@ class PyramidVisionTransformerImpr(nn.Module):
         #     depth[i] = d.permute(0,2,3,1).reshape(b,H*W,c)
         
         for i, blk in enumerate(self.block4):
-            #     fused = self.cross[3](depth[i].reshape(x.shape), x)[0]
-            #     B,C,H,W = fused.shape
-            #     fused = fused.reshape(B,C,H*W).permute(0,2,1)   
+            # fused = self.cross[3](depth[i].reshape(x.shape), x)[0]
+            # B,C,H,W = fused.shape
+            # fused = fused.reshape(B,C,H*W).permute(0,2,1)   
             # x = blk(fused, H, W)
+
             x = blk(x+depth[i].reshape(x.shape), H, W) #10, 22^2, 512
         x = self.norm4(x)
         x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
@@ -1566,59 +1228,44 @@ def _conv_filter(state_dict, patch_size=16):
     return out_dict
 
 
-@register_model
-class pvt_v2_b0(PyramidVisionTransformerImpr):
-    def __init__(self, **kwargs):
-        super(pvt_v2_b0, self).__init__(
-            patch_size=4, embed_dims=[32, 64, 160, 256], num_heads=[1, 2, 5, 8], mlp_ratios=[8, 8, 4, 4],
-            qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), depths=[2, 2, 2, 2], sr_ratios=[8, 4, 2, 1],
-            drop_rate=0.0, drop_path_rate=0.1)
 
 
 
-@register_model
-class pvt_v2_b1(PyramidVisionTransformerImpr):
-    def __init__(self, **kwargs):
-        super(pvt_v2_b1, self).__init__(
-            patch_size=4, embed_dims=[64, 128, 320, 512], num_heads=[1, 2, 5, 8], mlp_ratios=[8, 8, 4, 4],
-            qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), depths=[2, 2, 2, 2], sr_ratios=[8, 4, 2, 1],
-            drop_rate=0.0, drop_path_rate=0.1)
 
-@register_model
-class pvt_v2_b2(PyramidVisionTransformerImpr):
-    def __init__(self, **kwargs):
-        super(pvt_v2_b2, self).__init__(
-            patch_size=4, embed_dims=[64, 128, 320, 512], num_heads=[1, 2, 5, 8], mlp_ratios=[8, 8, 4, 4],
-            qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), depths=[3, 4, 6, 3], sr_ratios=[8, 4, 2, 1],
-            drop_rate=0.0, drop_path_rate=0.1)
+class new_WindowFusion(nn.Module):
+    def __init__(self, dim, num_heads=8, qkv_bias=False, qk_scale=None, attn_drop=0., proj_drop=0.):
+        super().__init__()
+        self.num_heads = num_heads
+        head_dim = dim // num_heads
+        # NOTE scale factor was wrong in my original version, can set manually to be compat with prev weights
+        self.scale = qk_scale or head_dim ** -0.5
 
-@register_model
-class pvt_v2_b3(PyramidVisionTransformerImpr):
-    def __init__(self, **kwargs):
-        super(pvt_v2_b3, self).__init__(
-            patch_size=4, embed_dims=[64, 128, 320, 512], num_heads=[1, 2, 5, 8], mlp_ratios=[8, 8, 4, 4],
-            qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), depths=[3, 4, 18, 3], sr_ratios=[8, 4, 2, 1],
-            drop_rate=0.0, drop_path_rate=0.1)
+        # self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
+        self.qk = nn.Linear(dim, dim * 2, bias=qkv_bias)
+        self.v = nn.Linear(dim, dim, bias=qkv_bias) 
+        self.attn_drop = nn.Dropout(attn_drop)
+        self.proj = nn.Linear(dim, dim)
+        self.proj_drop = nn.Dropout(proj_drop)
 
-@register_model
-class pvt_v2_b4(PyramidVisionTransformerImpr):
-    def __init__(self, **kwargs):
-        super(pvt_v2_b4, self).__init__(
-            patch_size=4, embed_dims=[64, 128, 320, 512], num_heads=[1, 2, 5, 8], mlp_ratios=[8, 8, 4, 4],
-            qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), depths=[3, 8, 27, 3], sr_ratios=[8, 4, 2, 1],
-            drop_rate=0.0, drop_path_rate=0.1)
+    def forward(self, x, y):
+        B, N, C = x.shape
+        ix = x; iy = y
+        H = int(math.sqrt(N))
+        q, k = self.qk(x).reshape(B, N, 2, self.num_heads,
+                                      C // self.num_heads).permute(2, 0, 3, 1, 4)
+        v = self.v(y).reshape(B, N, 1, self.num_heads,
+                                      C // self.num_heads).permute(2, 0, 3, 1, 4)[0]                                
 
+        attn = (q @ k.transpose(-2, -1)) * self.scale
+        attn = attn.softmax(dim=-1)
+        attn = self.attn_drop(attn)
 
-@register_model
-class pvt_v2_b5(PyramidVisionTransformerImpr):
-    def __init__(self, **kwargs):
-        super(pvt_v2_b5, self).__init__(
-            patch_size=4, embed_dims=[64, 128, 320, 512], num_heads=[1, 2, 5, 8], mlp_ratios=[4, 4, 4, 4],
-            qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), depths=[3, 6, 40, 3], sr_ratios=[8, 4, 2, 1],
-            drop_rate=0.0, drop_path_rate=0.1)
-
-
-
+        x = (attn @ v).transpose(1, 2).reshape(B, N, C)
+        x = self.proj(x)
+        x = self.proj_drop(x)
+        x = x + ix + iy
+        x = x.permute(0,2,1).reshape(B,C,H,H)
+        return x
 
 class WindowFusion(nn.Module):
     """ Window based multi-head self attention (W-MSA) module with relative position bias.
@@ -1719,7 +1366,7 @@ class WindowFusion(nn.Module):
 
 
 
-        return x*identity+identity_y, x.sigmoid()#bias
+        return x*identity+identity_x, x.sigmoid()#bias
 
 
 
@@ -1799,3 +1446,53 @@ def calc_rel_pos_spatial(
 
     return attn
 
+@register_model
+class pvt_v2_b0(PyramidVisionTransformerImpr):
+    def __init__(self, **kwargs):
+        super(pvt_v2_b0, self).__init__(
+            patch_size=4, embed_dims=[32, 64, 160, 256], num_heads=[1, 2, 5, 8], mlp_ratios=[8, 8, 4, 4],
+            qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), depths=[2, 2, 2, 2], sr_ratios=[8, 4, 2, 1],
+            drop_rate=0.0, drop_path_rate=0.1)
+
+
+
+@register_model
+class pvt_v2_b1(PyramidVisionTransformerImpr):
+    def __init__(self, **kwargs):
+        super(pvt_v2_b1, self).__init__(
+            patch_size=4, embed_dims=[64, 128, 320, 512], num_heads=[1, 2, 5, 8], mlp_ratios=[8, 8, 4, 4],
+            qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), depths=[2, 2, 2, 2], sr_ratios=[8, 4, 2, 1],
+            drop_rate=0.0, drop_path_rate=0.1)
+
+@register_model
+class pvt_v2_b2(PyramidVisionTransformerImpr):
+    def __init__(self, **kwargs):
+        super(pvt_v2_b2, self).__init__(
+            patch_size=4, embed_dims=[64, 128, 320, 512], num_heads=[1, 2, 5, 8], mlp_ratios=[8, 8, 4, 4],
+            qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), depths=[3, 4, 6, 3], sr_ratios=[8, 4, 2, 1],
+            drop_rate=0.0, drop_path_rate=0.1)
+
+@register_model
+class pvt_v2_b3(PyramidVisionTransformerImpr):
+    def __init__(self, **kwargs):
+        super(pvt_v2_b3, self).__init__(
+            patch_size=4, embed_dims=[64, 128, 320, 512], num_heads=[1, 2, 5, 8], mlp_ratios=[8, 8, 4, 4],
+            qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), depths=[3, 4, 18, 3], sr_ratios=[8, 4, 2, 1],
+            drop_rate=0.0, drop_path_rate=0.1)
+
+@register_model
+class pvt_v2_b4(PyramidVisionTransformerImpr):
+    def __init__(self, **kwargs):
+        super(pvt_v2_b4, self).__init__(
+            patch_size=4, embed_dims=[64, 128, 320, 512], num_heads=[1, 2, 5, 8], mlp_ratios=[8, 8, 4, 4],
+            qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), depths=[3, 8, 27, 3], sr_ratios=[8, 4, 2, 1],
+            drop_rate=0.0, drop_path_rate=0.1)
+
+
+@register_model
+class pvt_v2_b5(PyramidVisionTransformerImpr):
+    def __init__(self, **kwargs):
+        super(pvt_v2_b5, self).__init__(
+            patch_size=4, embed_dims=[64, 128, 320, 512], num_heads=[1, 2, 5, 8], mlp_ratios=[4, 4, 4, 4],
+            qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), depths=[3, 6, 40, 3], sr_ratios=[8, 4, 2, 1],
+            drop_rate=0.0, drop_path_rate=0.1)

@@ -12,14 +12,14 @@ find_unused_parameters: True
 
 # Dataset and loaders
 train_dataloader:
-  batch_size: 8
+  batch_size: 10
   num_workers: 4 
   pin_memory: true
   persistent_workers: true
   dataset: 
     type: COD10K_CAMO_TRAIN
     data_dir: /root/autodl-tmp/dataset/cod_train
-    depth_dir: Depth_nyu_linear_large
+    depth_dir: Depth_kitti_linear_large
     split: train
   sampler:
     type: DefaultSampler
@@ -30,7 +30,7 @@ val_dataloader:
   dataset: 
     type: COD10K_TEST
     data_dir: /root/autodl-tmp/dataset/cod10k_test
-    depth_dir: Depth_nyu_linear_large
+    depth_dir: Depth_kitti_linear_large
     split: val
   sampler:
     type: DefaultSampler
@@ -61,7 +61,7 @@ optim_wrapper:
     #0.9
   optimizer:
     type: AdamW
-    lr: 0.0004
+    lr: 0.0005
     weight_decay: 0.1
   paramwise_cfg: 
     bypass_duplicate: True

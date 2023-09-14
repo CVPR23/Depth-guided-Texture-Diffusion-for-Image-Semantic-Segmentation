@@ -89,7 +89,7 @@ def create_depther(cfg, backbone_model, backbone_size, head_type):
 
     return depther
 
-BACKBONE_SIZE = "giant" # in ("small", "base", "large" or "giant")
+BACKBONE_SIZE = "large" # in ("small", "base", "large" or "giant")
 
 
 backbone_archs = {
@@ -101,7 +101,7 @@ backbone_archs = {
 backbone_arch = backbone_archs[BACKBONE_SIZE]
 backbone_name = f"dinov2_{backbone_arch}"
 
-backbone_model = torch.hub.load('../pretrain/dinov2', 'dinov2_vitg14', source='local') # sota depth estimation#
+backbone_model = torch.hub.load('../pretrain/dinov2', 'dinov2_vitl14', source='local') # sota depth estimation#
 # backbone_model = torch.hub.load(repo_or_dir="facebookresearch/dinov2", model=backbone_name)
 backbone_model.eval()
 backbone_model.cuda()
@@ -117,8 +117,8 @@ def load_config_from_url(url: str) -> str:
         return f.read().decode()
 
 
-HEAD_DATASET = "kitti" # in ("nyu", "kitti")
-HEAD_TYPE = "linear" # in ("linear", "linear4", "dpt")
+HEAD_DATASET = "nyu" # in ("nyu", "kitti")
+HEAD_TYPE = "dpt" # in ("linear", "linear4", "dpt")
 
 
 DINOV2_BASE_URL = "https://dl.fbaipublicfiles.com/dinov2"
@@ -157,7 +157,7 @@ image = load_image_from_url(EXAMPLE_IMAGE_URL)
 import os
 from tqdm import tqdm
 path = '/root/autodl-tmp/dataset/cod_train/Imgs'
-save_path = '/root/autodl-tmp/dataset/cod_train/Depth_kitti_linear_giant'
+save_path = '/root/autodl-tmp/dataset/cod_train/Depth_nyu_dpt_large_1408'
 if not os.path.exists(save_path):
     os.mkdir(save_path)
 i = 0
@@ -191,7 +191,7 @@ for filename in tqdm(os.listdir(path)):
             return Image.fromarray(colors)
         transform = make_depth_transform()
         scale_factor = 1
-        rescaled_image = image.resize((704,704))#(int(scale_factor * image.width), int(scale_factor * image.height)))
+        rescaled_image = image.resize((1408,1408))#(int(scale_factor * image.width), int(scale_factor * image.height)))
         transformed_image = transform(rescaled_image)
         batch = transformed_image.unsqueeze(0).cuda() # Make a batch of one image
         with torch.inference_mode():

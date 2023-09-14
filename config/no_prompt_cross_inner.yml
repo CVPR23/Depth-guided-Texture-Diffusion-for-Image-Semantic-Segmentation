@@ -1,4 +1,4 @@
-_base_: 
+backup_DQnet_base_: 
   - base/visualization/clearml.yml
 
 # Setup
@@ -38,7 +38,7 @@ val_dataloader:
 
 # Model
 model:
-  type: DQnet
+  type: backup_DQnet
   win_size: 3
   filter_ratio: 0.9
   using_sam: True

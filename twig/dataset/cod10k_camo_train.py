@@ -12,14 +12,14 @@ import torch
 class COD10K_CAMO_TRAIN(Dataset):
     """Load data for COD training on training set of COD10K and CAMO"""
 
-    def __init__(self, data_dir: str, split: str, image_size: Optional[Union[tuple, list]] = None):
+    def __init__(self, data_dir: str, depth_dir: str, split: str, image_size: Optional[Union[tuple, list]] = None):
         self.trainsize = 704#384
         self.cropsize = 224
         if split == 'train':
             self.images = [os.path.join(data_dir, 'Imgs', f) for f in os.listdir(os.path.join(data_dir, 'Imgs'))]
             self.gts = [os.path.join(data_dir, 'GT', f) for f in os.listdir(os.path.join(data_dir, 'GT'))]
             # depth_dir = '/root/autodl-tmp/sw/workspace/dqnet-depth-nest/Metric3D-main/show_dirs/convlarge.0.3_150/20230901_154136/vis/cod_train'
-            self.depth = [os.path.join(data_dir, 'Depth_kitti_linear_large', f) for f in os.listdir(os.path.join(data_dir, 'Depth_kitti_linear_large'))]
+            self.depth = [os.path.join(data_dir, depth_dir, f) for f in os.listdir(os.path.join(data_dir, depth_dir))]
         elif split == 'test' or split == 'val':
             raise ValueError(f'The training set of COD10K and CAMO is usually used for training')         
         else:
