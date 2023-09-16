@@ -33,7 +33,7 @@ import mmseg
 
 
 @export
-class backup_DQnet(BaseModel):
+class DQnet(BaseModel):
     """DQnet model"""
     def __init__(self, win_size: Optional[int]=None, filter_ratio: Optional[float]=None, 
                  using_depth: Optional[bool]=None, using_sam: Optional[bool]=None,
@@ -41,7 +41,7 @@ class backup_DQnet(BaseModel):
                  pretrain_sam: Optional[str]=None, head: Optional[object]=None):
         super().__init__()
 
-        self.hitnet = Hitnet()
+        self.hitnet = Hitnet(win_size=win_size)
         self.batch = 0
 
 
@@ -159,7 +159,7 @@ class backup_DQnet(BaseModel):
 
     
 @export
-class backup_PretrainInitHook(Hook):
+class PretrainInitHook(Hook):
     """Init with pretrained model"""
     priority = 'NORMAL'
 
@@ -568,10 +568,10 @@ class ORSNet(nn.Module):
         return x
 
 class Hitnet(nn.Module):
-    def __init__(self, channel=32,n_feat=32,scale_unetfeats=32,kernel_size=3,reduction=4,bias=False,act=nn.PReLU()):
+    def __init__(self, channel=32,n_feat=32,scale_unetfeats=32,kernel_size=3,reduction=4,bias=False,act=nn.PReLU(),win_size=10):
         super(Hitnet, self).__init__()
 
-        self.backbone = pvt_v2_b2()  # [64, 128, 320, 512]
+        self.backbone = pvt_v2_b2(win_size=win_size)  # [64, 128, 320, 512]
 
         # path = 'pretrain/pvt_v2_b2.pth'
         # save_model = torch.load(path)
@@ -905,7 +905,7 @@ class Interpolate(nn.Module):
         return x
 
 class Depth_prompt(nn.Module):
-    def __init__(self, scale_factor, input_dim, embed_dim, depth, fusion=False):
+    def __init__(self, scale_factor, input_dim, embed_dim, depth, win_size, fusion=False):
         super(Depth_prompt, self).__init__()
         self.scale_factor = 2#scale_factor
         self.embed_dim = embed_dim
@@ -928,7 +928,9 @@ class Depth_prompt(nn.Module):
         #     # nn.Linear(1, self.embed_dim)
         # )
         self.embedding_generator = nn.Linear(self.input_dim, self.input_dim//self.scale_factor)
-        self.depth_adapter = nn.Linear(1, self.input_dim//self.scale_factor)
+        self.depth_adapter = nn.Sequential(
+            nn.Linear(1, self.input_dim//self.scale_factor)
+        )
         
         # self.embedding_generator = nn.Linear(self.input_dim, self.input_dim//self.scale_factor)
         self.fusion = fusion
@@ -939,7 +941,7 @@ class Depth_prompt(nn.Module):
             )
             setattr(self, 'lightweight_mlp_{}'.format(str(i)), lightweight_mlp)
             if self.fusion == True:
-                cross = WindowFusion(self.embed_dim//self.scale_factor)
+                cross = WindowFusion(self.embed_dim//self.scale_factor, window_size=(win_size, win_size))
                 setattr(self, 'cross_{}'.format(str(i)), cross)
 
 
@@ -952,9 +954,8 @@ class Depth_prompt(nn.Module):
 
 
     def forward(self, depth, cues, cross=False):
-        # N, C, H, W = depth.shape
-        # depth_feature = depth.view(N, C, H*W).permute(0, 2, 1)
-        depth_feature = depth
+        N, C, H, W = depth.shape
+        depth_feature = depth.view(N, C, H*W).permute(0, 2, 1)
         depth_feature = self.embedding_generator(depth_feature)
         N, C, H, W = cues.shape
         cues = cues.view(N, C, H*W).permute(0, 2, 1)
@@ -981,7 +982,7 @@ class PyramidVisionTransformerImpr(nn.Module):
     def __init__(self, img_size=224, patch_size=16, in_chans=3, num_classes=1000, embed_dims=[64, 128, 256, 512],
                  num_heads=[1, 2, 4, 8], mlp_ratios=[4, 4, 4, 4], qkv_bias=False, qk_scale=None, drop_rate=0.,
                  attn_drop_rate=0., drop_path_rate=0., norm_layer=nn.LayerNorm,
-                 depths=[3, 4, 6, 3], sr_ratios=[8, 4, 2, 1]):
+                 depths=[3, 4, 6, 3], sr_ratios=[8, 4, 2, 1], win_size=10):
         super().__init__()
         self.num_classes = num_classes
         self.depths = depths
@@ -1031,13 +1032,13 @@ class PyramidVisionTransformerImpr(nn.Module):
         self.norm4 = norm_layer(embed_dims[3])
 
         # depth prompt
-        self.dino_dim = 64#768
+        self.dino_dim = 768#768
         self.scale_factor = 4
         self.depth_generator = nn.ModuleList([
-            Depth_prompt(self.scale_factor, self.dino_dim, embed_dims[0], self.depths[0], True),
-            Depth_prompt(self.scale_factor, self.dino_dim, embed_dims[1], self.depths[1], True),
-            Depth_prompt(self.scale_factor, self.dino_dim, embed_dims[2], self.depths[2], True),
-            Depth_prompt(self.scale_factor, self.dino_dim, embed_dims[3], self.depths[3], True),
+            Depth_prompt(self.scale_factor, self.dino_dim, embed_dims[0], self.depths[0], win_size, True),
+            Depth_prompt(self.scale_factor, self.dino_dim, embed_dims[1], self.depths[1], win_size, True),
+            Depth_prompt(self.scale_factor, self.dino_dim, embed_dims[2], self.depths[2], win_size, True),
+            Depth_prompt(self.scale_factor, self.dino_dim, embed_dims[3], self.depths[3], win_size, True),
             ])
 
 
@@ -1104,8 +1105,11 @@ class PyramidVisionTransformerImpr(nn.Module):
         # stage 1
         x, H, W = self.patch_embed1(x)
 
-        depth = F.interpolate(pred_normal, size=(H,W), mode='bilinear')
-        depth = self.depth_generator[0](x, depth)
+        depth = F.interpolate(pred_normal, size=(22,22), mode='bilinear')
+        B,N,C = x.shape
+        reshape_x = x.permute(0,2,1).reshape(B,C,H,W)
+        reshape_x = F.interpolate(reshape_x, size=(22,22), mode='bilinear')
+        depth = self.depth_generator[0](reshape_x, depth)
         # for i, d in enumerate(depth):
         #     b,n,c = d.shape
         #     h = int(math.sqrt(n))
@@ -1118,8 +1122,8 @@ class PyramidVisionTransformerImpr(nn.Module):
             # B,C,H,W = fused.shape
             # fused = fused.reshape(B,C,H*W).permute(0,2,1)
             # x = blk(fused, H, W)
-
-            x = blk(x+depth[i].reshape(x.shape), H, W) #10, 176^2, 64
+            depth[i] = F.interpolate(depth[i].permute(0,2,1).reshape(B,C,22,22), size=(H,W), mode='bilinear').flatten(2).permute(0,2,1)
+            x = blk(x, H, W)#+depth[i].reshape(x.shape), H, W) #10, 176^2, 64
         x = self.norm1(x)
         x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
         outs.append(x)
@@ -1127,8 +1131,11 @@ class PyramidVisionTransformerImpr(nn.Module):
         # stage 2
         x, H, W = self.patch_embed2(x)
 
-        depth = F.interpolate(pred_normal, size=(H,W), mode='bilinear')
-        depth = self.depth_generator[1](x, depth)
+        depth = F.interpolate(pred_normal, size=(22,22), mode='bilinear')
+        B,N,C = x.shape
+        reshape_x = x.permute(0,2,1).reshape(B,C,H,W)
+        reshape_x = F.interpolate(reshape_x, size=(22,22), mode='bilinear')
+        depth = self.depth_generator[1](reshape_x, depth)
         # for i, d in enumerate(depth):
         #     b,n,c = d.shape
         #     h = int(math.sqrt(n))
@@ -1141,8 +1148,8 @@ class PyramidVisionTransformerImpr(nn.Module):
             # B,C,H,W = fused.shape
             # fused = fused.reshape(B,C,H*W).permute(0,2,1)                
             # x = blk(fused, H, W)
-
-            x = blk(x+depth[i].reshape(x.shape), H, W) #10, 88^2, 128
+            depth[i] = F.interpolate(depth[i].permute(0,2,1).reshape(B,C,22,22), size=(H,W), mode='bilinear').flatten(2).permute(0,2,1)
+            x = blk(x, H, W)#+depth[i].reshape(x.shape), H, W) #10, 88^2, 128
         x = self.norm2(x)
         x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
         outs.append(x)
@@ -1150,8 +1157,11 @@ class PyramidVisionTransformerImpr(nn.Module):
         # stage 3
         x, H, W = self.patch_embed3(x)
 
-        depth = F.interpolate(pred_normal, size=(H,W), mode='bilinear')
-        depth = self.depth_generator[2](x, depth)
+        depth = F.interpolate(pred_normal, size=(22,22), mode='bilinear')
+        B,N,C = x.shape
+        reshape_x = x.permute(0,2,1).reshape(B,C,H,W)
+        reshape_x = F.interpolate(reshape_x, size=(22,22), mode='bilinear')
+        depth = self.depth_generator[2](reshape_x, depth)
         # for i, d in enumerate(depth):
         #     b,n,c = d.shape
         #     h = int(math.sqrt(n))
@@ -1164,8 +1174,8 @@ class PyramidVisionTransformerImpr(nn.Module):
             # B,C,H,W = fused.shape
             # fused = fused.reshape(B,C,H*W).permute(0,2,1)              
             # x = blk(fused, H, W)
-
-            x = blk(x+depth[i].reshape(x.shape), H, W) #10, 44^2, 320
+            depth[i] = F.interpolate(depth[i].permute(0,2,1).reshape(B,C,22,22), size=(H,W), mode='bilinear').flatten(2).permute(0,2,1)
+            x = blk(x, H, W)#+depth[i].reshape(x.shape), H, W) #10, 44^2, 320
         x = self.norm3(x)
         x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
         outs.append(x)
@@ -1173,8 +1183,11 @@ class PyramidVisionTransformerImpr(nn.Module):
         # stage 4
         x, H, W = self.patch_embed4(x)
 
-        depth = F.interpolate(pred_normal, size=(H,W), mode='bilinear')
-        depth = self.depth_generator[3](x, depth)
+        depth = F.interpolate(pred_normal, size=(22,22), mode='bilinear')
+        B,N,C = x.shape
+        reshape_x = x.permute(0,2,1).reshape(B,C,H,W)
+        reshape_x = F.interpolate(reshape_x, size=(22,22), mode='bilinear')
+        depth = self.depth_generator[3](reshape_x, depth)
         # for i, d in enumerate(depth):
         #     b,n,c = d.shape
         #     h = int(math.sqrt(n))
@@ -1187,8 +1200,8 @@ class PyramidVisionTransformerImpr(nn.Module):
             # B,C,H,W = fused.shape
             # fused = fused.reshape(B,C,H*W).permute(0,2,1)   
             # x = blk(fused, H, W)
-
-            x = blk(x+depth[i].reshape(x.shape), H, W) #10, 22^2, 512
+            depth[i] = F.interpolate(depth[i].permute(0,2,1).reshape(B,C,22,22), size=(H,W), mode='bilinear').flatten(2).permute(0,2,1)
+            x = blk(x, H, W)#+depth[i].reshape(x.shape), H, W) #10, 22^2, 512
         x = self.norm4(x)
         x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
         outs.append(x)
@@ -1366,7 +1379,7 @@ class WindowFusion(nn.Module):
 
 
 
-        return x*identity+identity_x, x.sigmoid()#bias
+        return x*identity+identity, x.sigmoid()#bias
 
 
 
@@ -1470,7 +1483,7 @@ class pvt_v2_b2(PyramidVisionTransformerImpr):
         super(pvt_v2_b2, self).__init__(
             patch_size=4, embed_dims=[64, 128, 320, 512], num_heads=[1, 2, 5, 8], mlp_ratios=[8, 8, 4, 4],
             qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), depths=[3, 4, 6, 3], sr_ratios=[8, 4, 2, 1],
-            drop_rate=0.0, drop_path_rate=0.1)
+            drop_rate=0.0, drop_path_rate=0.1, win_size=10)
 
 @register_model
 class pvt_v2_b3(PyramidVisionTransformerImpr):

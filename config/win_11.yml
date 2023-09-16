@@ -12,7 +12,7 @@ find_unused_parameters: True
 
 # Dataset and loaders
 train_dataloader:
-  batch_size: 8
+  batch_size: 10
   num_workers: 4 
   pin_memory: true
   persistent_workers: true
@@ -39,7 +39,7 @@ val_dataloader:
 # Model
 model:
   type: DQnet
-  win_size: 3
+  win_size: 11
   filter_ratio: 0.9
   using_sam: True
   using_depth: True
@@ -61,7 +61,7 @@ optim_wrapper:
     #0.9
   optimizer:
     type: AdamW
-    lr: 0.0004
+    lr: 0.0005
     weight_decay: 0.1
   paramwise_cfg: 
     bypass_duplicate: True
