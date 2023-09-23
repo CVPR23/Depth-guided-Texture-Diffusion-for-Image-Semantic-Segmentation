@@ -33,7 +33,7 @@ import mmseg
 
 
 @export
-class DQnet(BaseModel):
+class x3(BaseModel):
     """DQnet model"""
     def __init__(self, win_size: Optional[int]=None, filter_ratio: Optional[float]=None, 
                  using_depth: Optional[bool]=None, using_sam: Optional[bool]=None,
@@ -159,7 +159,7 @@ class DQnet(BaseModel):
 
     
 @export
-class PretrainInitHook(Hook):
+class y3(Hook):
     """Init with pretrained model"""
     priority = 'NORMAL'
 
@@ -907,10 +907,10 @@ class Interpolate(nn.Module):
 
     
 class ShapePropWeightRegressor(nn.Module):
-    def __init__(self, in_channels):
+    def __init__(self, in_channels, latent_dim):
         super(ShapePropWeightRegressor, self).__init__()
         use_gn = False
-        self.latent_dim = 24
+        self.latent_dim = latent_dim
         self.reg = nn.Conv2d(in_channels, self.latent_dim*9, kernel_size=1)
 
     def forward(self, x):
@@ -918,10 +918,10 @@ class ShapePropWeightRegressor(nn.Module):
         return torch.sigmoid(weights)
 
 class ShapePropEncoder(nn.Module):
-    def __init__(self, in_channels):
+    def __init__(self, in_channels, latent_dim):
         super(ShapePropEncoder, self).__init__()
         use_gn = False
-        latent_dim = 24
+        # latent_dim = 48
         dilation = 1
         self.encoder = nn.Sequential(
             nn.Conv2d(in_channels, latent_dim, kernel_size=3, stride=1, padding=dilation, dilation=dilation),
@@ -935,7 +935,7 @@ class ShapePropEncoder(nn.Module):
         return embedding
 
 class MessagePassing(nn.Module):
-    def __init__(self, k=3, max_step=5, sym_norm=False):
+    def __init__(self, k=3, max_step=2, sym_norm=False):
         super(MessagePassing, self).__init__()
         self.k = k
         self.size = k * k
@@ -962,10 +962,10 @@ class MessagePassing(nn.Module):
         return x
 
 class ShapePropDecoder(nn.Module):
-    def __init__(self, out_dim):
+    def __init__(self, out_dim, latent_dim):
         super(ShapePropDecoder, self).__init__()
         use_gn = False
-        latent_dim = 24
+        # latent_dim = 48
         dilation = 1
         self.decoder = nn.Sequential(
             nn.Conv2d(latent_dim, latent_dim, kernel_size=3, stride=1, padding=dilation, dilation=dilation),
@@ -1022,10 +1022,11 @@ class Depth_prompt(nn.Module):
 
 
         # propagation model
-        self.propagation_weight_regressor = ShapePropWeightRegressor(embed_dim)
-        self.encoder = ShapePropEncoder(1)
+        latent_dim = 24
+        self.propagation_weight_regressor = ShapePropWeightRegressor(embed_dim, latent_dim)
+        self.encoder = ShapePropEncoder(1, latent_dim)
         self.message_passing = MessagePassing(sym_norm=False)
-        self.decoder = ShapePropDecoder(1)
+        self.decoder = ShapePropDecoder(1, latent_dim)
 
     def init_embeddings(self, x):
         x = x.permute(0,3,1,2).contiguous()

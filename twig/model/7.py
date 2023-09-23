@@ -33,7 +33,7 @@ import mmseg
 
 
 @export
-class DQnet(BaseModel):
+class x7(BaseModel):
     """DQnet model"""
     def __init__(self, win_size: Optional[int]=None, filter_ratio: Optional[float]=None, 
                  using_depth: Optional[bool]=None, using_sam: Optional[bool]=None,
@@ -159,7 +159,7 @@ class DQnet(BaseModel):
 
     
 @export
-class PretrainInitHook(Hook):
+class y7(Hook):
     """Init with pretrained model"""
     priority = 'NORMAL'
 
@@ -935,7 +935,7 @@ class ShapePropEncoder(nn.Module):
         return embedding
 
 class MessagePassing(nn.Module):
-    def __init__(self, k=3, max_step=5, sym_norm=False):
+    def __init__(self, k=3, max_step=9, sym_norm=False):
         super(MessagePassing, self).__init__()
         self.k = k
         self.size = k * k

@@ -33,7 +33,7 @@ import mmseg
 
 
 @export
-class DQnet(BaseModel):
+class newx11(BaseModel):
     """DQnet model"""
     def __init__(self, win_size: Optional[int]=None, filter_ratio: Optional[float]=None, 
                  using_depth: Optional[bool]=None, using_sam: Optional[bool]=None,
@@ -159,7 +159,7 @@ class DQnet(BaseModel):
 
     
 @export
-class PretrainInitHook(Hook):
+class newy11(Hook):
     """Init with pretrained model"""
     priority = 'NORMAL'
 
@@ -935,7 +935,7 @@ class ShapePropEncoder(nn.Module):
         return embedding
 
 class MessagePassing(nn.Module):
-    def __init__(self, k=3, max_step=5, sym_norm=False):
+    def __init__(self, k=3, max_step=12, sym_norm=False):
         super(MessagePassing, self).__init__()
         self.k = k
         self.size = k * k
@@ -1043,12 +1043,12 @@ class Depth_prompt(nn.Module):
         prompts = []
 
 
-        # propagation
-        weights = self.propagation_weight_regressor(depth)
-        saliency = ori_cues
-        embedding = self.encoder(saliency)
-        embedding = self.message_passing(embedding, weights)
-        shape_activation = self.decoder(embedding); cues = shape_activation
+        # # propagation
+        # weights = self.propagation_weight_regressor(depth)
+        # saliency = ori_cues
+        # embedding = self.encoder(saliency)
+        # embedding = self.message_passing(embedding, weights)
+        # shape_activation = self.decoder(embedding); cues = shape_activation
 
         
         # prompt generating
