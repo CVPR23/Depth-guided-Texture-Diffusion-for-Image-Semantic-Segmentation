@@ -10,20 +10,23 @@ import torch
 class CAMO_TEST(Dataset):
     """Load data for COD testing on testing set of CAMO"""
 
-    def __init__(self, data_dir: str, split: str, image_size: Optional[Union[tuple, list]] = None):
-        self.trainsize = 384
+    def __init__(self, data_dir: str, depth_dir: str, split: str, image_size: Optional[Union[tuple, list]] = None):
+        self.trainsize = 704
         if split == 'train':
             raise ValueError(f'The testing set of CAMO is usually used for testing') 
         elif split == 'test' or split == 'val':
             self.images = [os.path.join(data_dir, 'Image', f) for f in os.listdir(os.path.join(data_dir, 'Image'))]
             self.gts = [os.path.join(data_dir, 'GT', f) for f in os.listdir(os.path.join(data_dir, 'GT'))]            
+            self.depth = [os.path.join(data_dir, depth_dir, f) for f in os.listdir(os.path.join(data_dir, depth_dir))]
         else:
             raise NotImplementedError(f'Unsupported split {split}')           
         self.images = sorted(self.images)
         self.gts = sorted(self.gts)
+        self.depth = sorted(self.depth)
         self.filter_files()
 
         self.raw_transform = transforms.Compose([
+
             transforms.Resize((self.trainsize, self.trainsize)),
         ])
         self.img_transform = transforms.Compose([
@@ -44,10 +47,12 @@ class CAMO_TEST(Dataset):
         raw = self.raw_transform(raw)
         image = self.img_transform(image)
         gt = self.gt_transform(gt)
+        depth = self.gt_transform(Image.open(self.depth[index]).convert('L'))
         return {
             'raw': raw,
             'input': image, 
-            'label': gt
+            'label': gt,
+            'depth': depth
         }
 
     def filter_files(self):

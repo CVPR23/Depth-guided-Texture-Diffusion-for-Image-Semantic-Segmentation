@@ -13,7 +13,7 @@ find_unused_parameters: True
 # Dataset and loaders
 train_dataloader:
   batch_size: 10
-  num_workers: 4 
+  num_workers: 8 
   pin_memory: true
   persistent_workers: true
   dataset: 
@@ -26,7 +26,7 @@ train_dataloader:
     shuffle: True
 val_dataloader:
   batch_size: 1
-  num_workers: 4
+  num_workers: 8
   dataset: 
     type: COD10K_TEST
     data_dir: /root/autodl-tmp/dataset/cod10k_test
@@ -66,36 +66,47 @@ optim_wrapper:
   paramwise_cfg: 
     bypass_duplicate: True
     custom_keys: 
-      depth_backbone:
-        lr_mult: 0 
-      depth_head:
-        lr_mult: 0 
       hitnet.backbone:
         lr_mult: 0.1
       hitnet.backbone.depth_generator:
         lr_mult: 1
-      depth_head:
-        lr_mult: 0 
-      norm0:
-        lr_mult: 0 
-      norm1:
-        lr_mult: 0 
-      norm2:
-        lr_mult: 0 
 
+      hitnet.backbone.propagation_weight_regressor_0:
+        lr_mult: 1 
+      hitnet.backbone.propagation_weight_regressor_1:
+        lr_mult: 1 
+      hitnet.backbone.propagation_weight_regressor_2:
+        lr_mult: 1 
+      hitnet.backbone.propagation_weight_regressor_3:
+        lr_mult: 1 
 
-      # sam.image_encoder:
-      #   lr_mult: 0
-      # sam.image_encoder.prompt_generator:
-      #   lr_mult: 0
-      # sam.image_encoder.depth_generator:
-      #   lr_mult: 1
-      # # sam.prompt_encoder:
-      # #   lr_mult: 1
-      # sam.mask_decoder:
-      #   lr_mult: 1
-      # depth_estimator:
-      #   lr_mult: 0
+      hitnet.backbone.encoder_0:
+        lr_mult: 1 
+      hitnet.backbone.encoder_1:
+        lr_mult: 1 
+      hitnet.backbone.encoder_2:
+        lr_mult: 1 
+      hitnet.backbone.encoder_3:
+        lr_mult: 1 
+
+      hitnet.backbone.message_passing_0:
+        lr_mult: 1 
+      hitnet.backbone.message_passing_1:
+        lr_mult: 1 
+      hitnet.backbone.message_passing_2:
+        lr_mult: 1 
+      hitnet.backbone.message_passing_3:
+        lr_mult: 1 
+
+      hitnet.backbone.decoder_0:
+        lr_mult: 1 
+      hitnet.backbone.decoder_1:
+        lr_mult: 1 
+      hitnet.backbone.decoder_2:
+        lr_mult: 1 
+      hitnet.backbone.decoder_3:
+        lr_mult: 1 
+
 
 
   # clip_grad:

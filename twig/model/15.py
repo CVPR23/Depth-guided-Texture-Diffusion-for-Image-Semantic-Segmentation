@@ -33,7 +33,7 @@ import mmseg
 
 
 @export
-class x7(BaseModel):
+class newx15(BaseModel):
     """DQnet model"""
     def __init__(self, win_size: Optional[int]=None, filter_ratio: Optional[float]=None, 
                  using_depth: Optional[bool]=None, using_sam: Optional[bool]=None,
@@ -166,7 +166,7 @@ class x7(BaseModel):
 
     
 @export
-class newy17(Hook):
+class newy15(Hook):
     """Init with pretrained model"""
     priority = 'NORMAL'
 
@@ -218,7 +218,7 @@ class newy17(Hook):
     #     model = runner.model.module if isinstance(runner.model, MMDistributedDataParallel) else runner.model
 
     #     # Load checkpoint of hitnet 
-    #     pretrain = 'output/test/epoch_80.pth'
+    #     pretrain = 'output/iter3_3layer/epoch_80.pth'
     #     checkpoint = torch.load(pretrain, map_location='cpu')
     #     print("Load pre-trained checkpoint from: %s" % pretrain)
     #     if 'model' in checkpoint:
@@ -931,10 +931,14 @@ class ShapePropEncoder(nn.Module):
         # latent_dim = 24
         dilation = 1
         self.encoder = nn.Sequential(
+            nn.Conv2d(in_channels, in_channels, kernel_size=3, stride=1, padding=dilation, dilation=dilation),
+            nn.ReLU(True),
             nn.Conv2d(in_channels, latent_dim, kernel_size=3, stride=1, padding=dilation, dilation=dilation),
 
-            nn.ReLU(True),
-            nn.Conv2d(latent_dim, latent_dim, kernel_size=3, stride=1, padding=dilation, dilation=dilation),
+            # nn.ReLU(True),
+            # nn.Conv2d(latent_dim, latent_dim, kernel_size=3, stride=1, padding=dilation, dilation=dilation),
+            # nn.ReLU(True),
+            # nn.Conv2d(latent_dim, latent_dim, kernel_size=3, stride=1, padding=dilation, dilation=dilation),
             nn.ReLU(True),
             nn.Conv2d(latent_dim, latent_dim, kernel_size=3, stride=1, padding=dilation, dilation=dilation),
         )
@@ -943,7 +947,7 @@ class ShapePropEncoder(nn.Module):
         return embedding
 
 class MessagePassing(nn.Module):
-    def __init__(self, k=3, max_step=7, sym_norm=False):
+    def __init__(self, k=3, max_step=3, sym_norm=False):
         super(MessagePassing, self).__init__()
         self.k = k
         self.size = k * k
@@ -978,10 +982,15 @@ class ShapePropDecoder(nn.Module):
         self.decoder = nn.Sequential(
             nn.Conv2d(latent_dim, latent_dim, kernel_size=3, stride=1, padding=dilation, dilation=dilation),
             nn.ReLU(True),
-            nn.Conv2d(latent_dim, latent_dim, kernel_size=3, stride=1, padding=dilation, dilation=dilation),
-            nn.ReLU(True),
+            # nn.Conv2d(latent_dim, latent_dim, kernel_size=3, stride=1, padding=dilation, dilation=dilation),
+            # nn.ReLU(True),
+            # nn.Conv2d(latent_dim, latent_dim, kernel_size=3, stride=1, padding=dilation, dilation=dilation),
+            # nn.ReLU(True),
             
             nn.Conv2d(latent_dim, out_dim, kernel_size=3, stride=1, padding=dilation, dilation=dilation),
+            nn.ReLU(True),
+            nn.Conv2d(out_dim, out_dim, kernel_size=3, stride=1, padding=dilation, dilation=dilation),
+
         )
 
     def forward(self, embedding):

@@ -33,7 +33,7 @@ import mmseg
 
 
 @export
-class x7(BaseModel):
+class newx12(BaseModel):
     """DQnet model"""
     def __init__(self, win_size: Optional[int]=None, filter_ratio: Optional[float]=None, 
                  using_depth: Optional[bool]=None, using_sam: Optional[bool]=None,
@@ -166,7 +166,7 @@ class x7(BaseModel):
 
     
 @export
-class newy17(Hook):
+class y2(Hook):
     """Init with pretrained model"""
     priority = 'NORMAL'
 
@@ -943,7 +943,7 @@ class ShapePropEncoder(nn.Module):
         return embedding
 
 class MessagePassing(nn.Module):
-    def __init__(self, k=3, max_step=7, sym_norm=False):
+    def __init__(self, k=3, max_step=6, sym_norm=False):
         super(MessagePassing, self).__init__()
         self.k = k
         self.size = k * k
@@ -991,15 +991,15 @@ class ShapePropDecoder(nn.Module):
 class Depth_prompt(nn.Module):
     def __init__(self, scale_factor, input_dim, embed_dim, depth, win_size, fusion=False):
         super(Depth_prompt, self).__init__()
-        self.scale_factor = 2#scale_factor
+        self.scale_factor = 4#scale_factor
         self.embed_dim = embed_dim
         self.depth = depth
         self.input_dim = embed_dim#input_dim
 
-        self.shared_mlp = nn.Linear(256, self.embed_dim)#self.input_dim//self.scale_factor, self.embed_dim)
+        self.shared_mlp = nn.Linear(self.input_dim//self.scale_factor, self.embed_dim)
         self.embedding_generator = nn.Linear(self.input_dim, self.input_dim//self.scale_factor)
         self.depth_adapter = nn.Sequential(
-            nn.Linear(1, 256)#self.input_dim//self.scale_factor)
+            nn.Linear(1, self.input_dim//self.scale_factor)
         )
         
         # self.embedding_generator = nn.Linear(self.input_dim, self.input_dim//self.scale_factor)
@@ -1007,7 +1007,7 @@ class Depth_prompt(nn.Module):
         for i in range(self.depth):
             lightweight_mlp = nn.Sequential(
                 # nn.GELU(),
-                nn.Linear(256,256),#self.input_dim//self.scale_factor, self.input_dim//self.scale_factor),
+                nn.Linear(self.input_dim//self.scale_factor, self.input_dim//self.scale_factor),
                 nn.GELU(),
             )
             setattr(self, 'lightweight_mlp_{}'.format(str(i)), lightweight_mlp)

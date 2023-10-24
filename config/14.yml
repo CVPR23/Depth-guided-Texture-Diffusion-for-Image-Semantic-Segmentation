@@ -19,18 +19,18 @@ train_dataloader:
   dataset: 
     type: COD10K_CAMO_TRAIN
     data_dir: /root/autodl-tmp/dataset/cod_train
-    depth_dir: Depth_nyu_linear_large_original_size
+    depth_dir: Depth_nyu_linear_large
     split: train
   sampler:
     type: DefaultSampler
     shuffle: True
 val_dataloader:
-  batch_size: 1
+  batch_size: 10
   num_workers: 8
   dataset: 
     type: COD10K_TEST
     data_dir: /root/autodl-tmp/dataset/cod10k_test
-    depth_dir: Depth_nyu_linear_large_original_size
+    depth_dir: Depth_nyu_linear_large
     split: val
   sampler:
     type: DefaultSampler
@@ -38,7 +38,7 @@ val_dataloader:
 
 # Model
 model:
-  type: newx10
+  type: newx16
   win_size: 22
   filter_ratio: 0.9
   using_sam: True
@@ -61,13 +61,13 @@ optim_wrapper:
     #0.9
   optimizer:
     type: AdamW
-    lr: 0.0005
+    lr: 0.001
     weight_decay: 0.1
   paramwise_cfg: 
     bypass_duplicate: True
     custom_keys: 
       hitnet.backbone:
-        lr_mult: 0.1
+        lr_mult: 0.05
       hitnet.backbone.depth_generator:
         lr_mult: 1
 

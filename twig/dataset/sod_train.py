@@ -9,19 +9,18 @@ import random
 import torch
 
 @export
-class COD10K_CAMO_TRAIN(Dataset):
-    """Load data for COD training on training set of COD10K and CAMO"""
+class SOD_TRAIN(Dataset):
+    """Load data for SOD training on training set"""
 
     def __init__(self, data_dir: str, depth_dir: str, split: str, image_size: Optional[Union[tuple, list]] = None):
         self.trainsize = 704#384
         self.cropsize = 224
         if True:#split == 'train':
-            self.images = [os.path.join(data_dir, 'Imgs', f) for f in os.listdir(os.path.join(data_dir, 'Imgs'))]
+            self.images = [os.path.join(data_dir, 'RGB', f) for f in os.listdir(os.path.join(data_dir, 'RGB'))]
             self.gts = [os.path.join(data_dir, 'GT', f) for f in os.listdir(os.path.join(data_dir, 'GT'))]
-            # depth_dir = '/root/autodl-tmp/sw/workspace/dqnet-depth-nest/Metric3D-main/show_dirs/convlarge.0.3_150/20230901_154136/vis/cod_train'
             self.depth = [os.path.join(data_dir, depth_dir, f) for f in os.listdir(os.path.join(data_dir, depth_dir))]
         elif split == 'test' or split == 'val':
-            raise ValueError(f'The training set of COD10K and CAMO is usually used for training')         
+            raise ValueError(f'The training set of SOD is usually used for training')         
         else:
             raise NotImplementedError(f'Unsupported split {split}')                     
         self.images = sorted(self.images)

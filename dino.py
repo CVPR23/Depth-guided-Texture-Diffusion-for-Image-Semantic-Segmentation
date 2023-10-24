@@ -118,7 +118,7 @@ def load_config_from_url(url: str) -> str:
 
 
 HEAD_DATASET = "nyu" # in ("nyu", "kitti")
-HEAD_TYPE = "dpt" # in ("linear", "linear4", "dpt")
+HEAD_TYPE = "linear" # in ("linear", "linear4", "dpt")
 
 
 DINOV2_BASE_URL = "https://dl.fbaipublicfiles.com/dinov2"
@@ -156,48 +156,87 @@ image = load_image_from_url(EXAMPLE_IMAGE_URL)
 
 import os
 from tqdm import tqdm
-path = '/root/autodl-tmp/dataset/cod_train/Imgs'
-save_path = '/root/autodl-tmp/dataset/cod_train/Depth_nyu_dpt_large_1408'
+path = '/root/autodl-tmp/dataset/cod_train/Imgs/' #TestDataset/STERE/RGB
+save_path = '/root/autodl-tmp/dataset/cod_train/Depth_nyu_linear_large_1x/' #TestDataset/STERE
 if not os.path.exists(save_path):
     os.mkdir(save_path)
 i = 0
 for filename in tqdm(os.listdir(path)):
     i+=1
-    if (filename.endswith(".jpg") or filename.endswith(".png")):  # 假设只处理.jpg格式的图片文件
-        image_path = os.path.join(path, filename)  # 图片文件的完整路径
+    if i>3286:
+        if (filename.endswith(".jpg") or filename.endswith(".png")):  # 假设只处理.jpg格式的图片文件
+            image_path = os.path.join(path, filename)  # 图片文件的完整路径
 
-        # 打开图片文件
-        image = Image.open(image_path).convert("RGB")
+            # 打开图片文件
+            image = Image.open(image_path).convert("RGB")
 
-        # 处理图片
-        import matplotlib
-        from torchvision import transforms
-        def make_depth_transform() -> transforms.Compose:
-            return transforms.Compose([
-                transforms.ToTensor(),
-                lambda x: 255.0 * x[:3], # Discard alpha component and scale by 255
-                transforms.Normalize(
-                    mean=(123.675, 116.28, 103.53),
-                    std=(58.395, 57.12, 57.375),
-                ),
-            ])
-        def render_depth(values, colormap_name="magma_r") -> Image:
-            min_value, max_value = values.min(), values.max()
-            normalized_values = (values - min_value) / (max_value - min_value)
+            # 处理图片
+            import matplotlib
+            from torchvision import transforms
+            def make_depth_transform() -> transforms.Compose:
+                return transforms.Compose([
+                    transforms.ToTensor(),
+                    lambda x: 255.0 * x[:3], # Discard alpha component and scale by 255
+                    transforms.Normalize(
+                        mean=(123.675, 116.28, 103.53),
+                        std=(58.395, 57.12, 57.375),
+                    ),
+                ])
+            def render_depth(values, colormap_name="magma_r") -> Image:
+                min_value, max_value = values.min(), values.max()
+                normalized_values = (values - min_value) / (max_value - min_value)
 
-            colormap = matplotlib.colormaps[colormap_name]
-            colors = colormap(normalized_values, bytes=True) # ((1)xhxwx4)
-            colors = colors[:, :, :3] # Discard alpha component
-            return Image.fromarray(colors)
-        transform = make_depth_transform()
+                colormap = matplotlib.colormaps[colormap_name]
+                colors = colormap(normalized_values, bytes=True) # ((1)xhxwx4)
+                colors = colors[:, :, :3] # Discard alpha component
+                return Image.fromarray(colors)
+            transform = make_depth_transform()
+
+            # max_size = 1980
+            # ratio = min(max_size / image.width, max_size / image.width)
+        #     try:
+        #         ratio = 1.5
+        #         scale_factor = ratio
+        #         rescaled_image = image.resize((int(scale_factor * image.width), int(scale_factor * image.height)))#
+        #         transformed_image = transform(rescaled_image)
+        #         batch = transformed_image.unsqueeze(0).cuda() # Make a batch of one image
+        #         with torch.inference_mode():
+        #             result = model.whole_inference(batch, img_meta=None, rescale=True)
+        #         depth_image = render_depth(result.squeeze().cpu())
+        #     except:
+        #         try:
+        #             scale_factor = 1
+        #             rescaled_image = image.resize((int(scale_factor * image.width), int(scale_factor * image.height)))#
+        #             transformed_image = transform(rescaled_image)
+        #             batch = transformed_image.unsqueeze(0).cuda() # Make a batch of one image
+        #             with torch.inference_mode():
+        #                 result = model.whole_inference(batch, img_meta=None, rescale=True)
+        #             depth_image = render_depth(result.squeeze().cpu())
+        #         except:
+        #             try:
+        #                 scale_factor = 3/4
+        #                 rescaled_image = image.resize((int(scale_factor * image.width), int(scale_factor * image.height)))#
+        #                 transformed_image = transform(rescaled_image)
+        #                 batch = transformed_image.unsqueeze(0).cuda() # Make a batch of one image
+        #                 with torch.inference_mode():
+        #                     result = model.whole_inference(batch, img_meta=None, rescale=True)
+        #                 depth_image = render_depth(result.squeeze().cpu())
+        #             except:
+        #                 scale_factor = 0.5
+        #                 rescaled_image = image.resize((int(scale_factor * image.width), int(scale_factor * image.height)))#
+        #                 transformed_image = transform(rescaled_image)
+        #                 batch = transformed_image.unsqueeze(0).cuda() # Make a batch of one image
+        #                 with torch.inference_mode():
+        #                     result = model.whole_inference(batch, img_meta=None, rescale=True)
+        #                 depth_image = render_depth(result.squeeze().cpu())
+
         scale_factor = 1
-        rescaled_image = image.resize((1408,1408))#(int(scale_factor * image.width), int(scale_factor * image.height)))
+        rescaled_image = image.resize((int(scale_factor * image.width), int(scale_factor * image.height)))#
         transformed_image = transform(rescaled_image)
         batch = transformed_image.unsqueeze(0).cuda() # Make a batch of one image
         with torch.inference_mode():
             result = model.whole_inference(batch, img_meta=None, rescale=True)
         depth_image = render_depth(result.squeeze().cpu())
-
 
 
         # 在文件名后添加"_depth"后缀

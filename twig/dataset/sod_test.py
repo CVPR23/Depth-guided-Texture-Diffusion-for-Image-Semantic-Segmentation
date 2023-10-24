@@ -7,24 +7,26 @@ from PIL import Image
 import torch
 
 @export
-class NC4K(Dataset):
-    """Load data for COD testing on NC4K"""
+class SOD_TEST(Dataset):
+    """Load data for COD testing on testing set of COD10K"""
 
     def __init__(self, data_dir: str, depth_dir: str, split: str, image_size: Optional[Union[tuple, list]] = None):
-        self.trainsize = 704#704
+        self.trainsize =704#384
         if split == 'train':
-            raise ValueError(f'The NC4K is usually used for testing') 
+            raise ValueError(f'The NLPR dataset is usually used for testing') 
         elif split == 'test' or split == 'val':
-            self.images = [os.path.join(data_dir, 'train', 'Image', f) for f in os.listdir(os.path.join(data_dir, 'train', 'Image'))]
-            self.gts = [os.path.join(data_dir, 'train', 'GT', f) for f in os.listdir(os.path.join(data_dir, 'train', 'GT'))]  
-            self.depth = [os.path.join(data_dir, 'train', depth_dir, f) for f in os.listdir(os.path.join(data_dir, 'train', depth_dir))]          
+            self.images = [os.path.join(data_dir, 'RGB', f) for f in os.listdir(os.path.join(data_dir, 'RGB'))]
+            self.gts = [os.path.join(data_dir, 'GT', f) for f in os.listdir(os.path.join(data_dir, 'GT'))]   
+            self.depth = [os.path.join(data_dir, depth_dir, f) for f in os.listdir(os.path.join(data_dir, depth_dir))]
         else:
             raise NotImplementedError(f'Unsupported split {split}')           
         self.images = sorted(self.images)
         self.gts = sorted(self.gts)
+        self.depth = sorted(self.depth)
         self.filter_files()
 
         self.raw_transform = transforms.Compose([
+
             transforms.Resize((self.trainsize, self.trainsize)),
         ])
         self.img_transform = transforms.Compose([

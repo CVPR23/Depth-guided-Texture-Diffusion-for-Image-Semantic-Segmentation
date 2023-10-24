@@ -19,18 +19,18 @@ train_dataloader:
   dataset: 
     type: COD10K_CAMO_TRAIN
     data_dir: /root/autodl-tmp/dataset/cod_train
-    depth_dir: Depth_nyu_linear_large_original_size
+    depth_dir: Depth_nyu_linear_large_trial
     split: train
   sampler:
     type: DefaultSampler
     shuffle: True
 val_dataloader:
-  batch_size: 1
+  batch_size: 10
   num_workers: 8
   dataset: 
     type: COD10K_TEST
     data_dir: /root/autodl-tmp/dataset/cod10k_test
-    depth_dir: Depth_nyu_linear_large_original_size
+    depth_dir: Depth_nyu_linear_large_trial
     split: val
   sampler:
     type: DefaultSampler
@@ -38,7 +38,7 @@ val_dataloader:
 
 # Model
 model:
-  type: newx10
+  type: newx19
   win_size: 22
   filter_ratio: 0.9
   using_sam: True

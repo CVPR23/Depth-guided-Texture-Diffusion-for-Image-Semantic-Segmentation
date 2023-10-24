@@ -907,10 +907,10 @@ class Interpolate(nn.Module):
 
     
 class ShapePropWeightRegressor(nn.Module):
-    def __init__(self, in_channels):
+    def __init__(self, in_channels, latent_dim):
         super(ShapePropWeightRegressor, self).__init__()
         use_gn = False
-        self.latent_dim = 24
+        self.latent_dim = latent_dim
         self.reg = nn.Conv2d(in_channels, self.latent_dim*9, kernel_size=1)
 
     def forward(self, x):
@@ -918,10 +918,10 @@ class ShapePropWeightRegressor(nn.Module):
         return torch.sigmoid(weights)
 
 class ShapePropEncoder(nn.Module):
-    def __init__(self, in_channels):
+    def __init__(self, in_channels, latent_dim):
         super(ShapePropEncoder, self).__init__()
         use_gn = False
-        latent_dim = 24
+        # latent_dim = 48
         dilation = 1
         self.encoder = nn.Sequential(
             nn.Conv2d(in_channels, latent_dim, kernel_size=3, stride=1, padding=dilation, dilation=dilation),
@@ -935,7 +935,7 @@ class ShapePropEncoder(nn.Module):
         return embedding
 
 class MessagePassing(nn.Module):
-    def __init__(self, k=3, max_step=5, sym_norm=False):
+    def __init__(self, k=3, max_step=2, sym_norm=False):
         super(MessagePassing, self).__init__()
         self.k = k
         self.size = k * k
@@ -962,10 +962,10 @@ class MessagePassing(nn.Module):
         return x
 
 class ShapePropDecoder(nn.Module):
-    def __init__(self, out_dim):
+    def __init__(self, out_dim, latent_dim):
         super(ShapePropDecoder, self).__init__()
         use_gn = False
-        latent_dim = 24
+        # latent_dim = 48
         dilation = 1
         self.decoder = nn.Sequential(
             nn.Conv2d(latent_dim, latent_dim, kernel_size=3, stride=1, padding=dilation, dilation=dilation),
@@ -1022,10 +1022,11 @@ class Depth_prompt(nn.Module):
 
 
         # propagation model
-        self.propagation_weight_regressor = ShapePropWeightRegressor(embed_dim)
-        self.encoder = ShapePropEncoder(1)
+        latent_dim = 24
+        self.propagation_weight_regressor = ShapePropWeightRegressor(embed_dim, latent_dim)
+        self.encoder = ShapePropEncoder(1, latent_dim)
         self.message_passing = MessagePassing(sym_norm=False)
-        self.decoder = ShapePropDecoder(1)
+        self.decoder = ShapePropDecoder(1, latent_dim)
 
     def init_embeddings(self, x):
         x = x.permute(0,3,1,2).contiguous()
@@ -1043,24 +1044,22 @@ class Depth_prompt(nn.Module):
         prompts = []
 
 
-        # propagation
-        weights = self.propagation_weight_regressor(depth)
-        saliency = ori_cues
-        embedding = self.encoder(saliency)
-        embedding = self.message_passing(embedding, weights)
-        shape_activation = self.decoder(embedding); cues = shape_activation
+        # # propagation
+        # weights = self.propagation_weight_regressor(depth)
+        # saliency = ori_cues
+        # embedding = self.encoder(saliency)
+        # embedding = self.message_passing(embedding, weights)
+        # shape_activation = self.decoder(embedding); cues = shape_activation
 
         
         # prompt generating
         cues = cues.view(N, C, H*W).permute(0, 2, 1)
         if self.fusion == True:
-            # fuse = getattr(self, 'cross')#'cross_{}'.format(str(i)))
             adapted_cues = self.depth_adapter(cues)
-            # fused = fuse(depth_feature, adapted_cues)[0]
             fused = adapted_cues#fused.flatten(2).permute(0,2,1)
         for i in range(self.depth):
             lightweight_mlp = getattr(self, 'lightweight_mlp_{}'.format(str(i)))
-            prompt = lightweight_mlp(fused) #* adapted_cues + adapted_cues
+            # prompt = lightweight_mlp(fused)  
             prompts.append(self.shared_mlp(prompt))
 
         return prompts  
@@ -1199,10 +1198,6 @@ class PyramidVisionTransformerImpr(nn.Module):
         depth = self.depth_generator[0](reshape_x, depth)
 
         for i, blk in enumerate(self.block1):
-            # fused = self.cross[0](depth[i].reshape(x.shape), x)[0]
-            # B,C,H,W = fused.shape
-            # fused = fused.reshape(B,C,H*W).permute(0,2,1)
-            # x = blk(fused, H, W)
             depth[i] = F.interpolate(depth[i].permute(0,2,1).reshape(B,C,self.cross_size,self.cross_size), size=(H,W), mode='bilinear').flatten(2).permute(0,2,1)
             x = blk(x+depth[i], H, W) #10, 176^2, 64
         x = self.norm1(x)
@@ -1218,10 +1213,6 @@ class PyramidVisionTransformerImpr(nn.Module):
         depth = self.depth_generator[1](reshape_x, depth)
         
         for i, blk in enumerate(self.block2):
-            # fused = self.cross[1](depth[i].reshape(x.shape), x)[0]
-            # B,C,H,W = fused.shape
-            # fused = fused.reshape(B,C,H*W).permute(0,2,1)                
-            # x = blk(fused, H, W)
             depth[i] = F.interpolate(depth[i].permute(0,2,1).reshape(B,C,self.cross_size,self.cross_size), size=(H,W), mode='bilinear').flatten(2).permute(0,2,1)
             x = blk(x+depth[i], H, W) #10, 88^2, 128
         x = self.norm2(x)
@@ -1235,18 +1226,8 @@ class PyramidVisionTransformerImpr(nn.Module):
         B,N,C = x.shape
         reshape_x = F.interpolate(x.permute(0,2,1).reshape(B,C,H,W), size=(self.cross_size,self.cross_size), mode='bilinear')
         depth = self.depth_generator[2](reshape_x, depth)
-        # for i, d in enumerate(depth):
-        #     b,n,c = d.shape
-        #     h = int(math.sqrt(n))
-        #     d = d.permute(0,2,1).reshape(b,c,h,h)
-        #     d = F.interpolate(d, size=(H,W), mode='bilinear')
-        #     depth[i] = d.permute(0,2,3,1).reshape(b,H*W,c)
         
         for i, blk in enumerate(self.block3):
-            # fused = self.cross[2](depth[i].reshape(x.shape), x)[0]
-            # B,C,H,W = fused.shape
-            # fused = fused.reshape(B,C,H*W).permute(0,2,1)              
-            # x = blk(fused, H, W)
             depth[i] = F.interpolate(depth[i].permute(0,2,1).reshape(B,C,self.cross_size,self.cross_size), size=(H,W), mode='bilinear').flatten(2).permute(0,2,1)
             x = blk(x+depth[i], H, W) #10, 44^2, 320
         x = self.norm3(x)
@@ -1260,18 +1241,8 @@ class PyramidVisionTransformerImpr(nn.Module):
         B,N,C = x.shape
         reshape_x = F.interpolate(x.permute(0,2,1).reshape(B,C,H,W), size=(self.cross_size,self.cross_size), mode='bilinear')
         depth = self.depth_generator[3](reshape_x, depth)
-        # for i, d in enumerate(depth):
-        #     b,n,c = d.shape
-        #     h = int(math.sqrt(n))
-        #     d = d.permute(0,2,1).reshape(b,c,h,h)
-        #     d = F.interpolate(d, size=(H,W), mode='bilinear')
-        #     depth[i] = d.permute(0,2,3,1).reshape(b,H*W,c)
-        
+
         for i, blk in enumerate(self.block4):
-            # fused = self.cross[3](depth[i].reshape(x.shape), x)[0]
-            # B,C,H,W = fused.shape
-            # fused = fused.reshape(B,C,H*W).permute(0,2,1)   
-            # x = blk(fused, H, W)
             depth[i] = F.interpolate(depth[i].permute(0,2,1).reshape(B,C,self.cross_size,self.cross_size), size=(H,W), mode='bilinear').flatten(2).permute(0,2,1)
             x = blk(x+depth[i], H, W) #10, 22^2, 512
         x = self.norm4(x)

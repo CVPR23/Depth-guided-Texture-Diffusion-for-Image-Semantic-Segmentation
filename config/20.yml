@@ -38,7 +38,7 @@ val_dataloader:
 
 # Model
 model:
-  type: newx10
+  type: newx20
   win_size: 22
   filter_ratio: 0.9
   using_sam: True
