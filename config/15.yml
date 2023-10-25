@@ -6,7 +6,7 @@ env_cfg: {}
 train_cfg:
   by_epoch: &by_epoch True
   max_epochs: &max_epochs 80
-  val_interval: 20
+  val_interval: 80
 val_cfg: {}
 find_unused_parameters: True
 
@@ -18,8 +18,8 @@ train_dataloader:
   persistent_workers: true
   dataset: 
     type: COD10K_CAMO_TRAIN
-    data_dir: /root/autodl-tmp/dataset/cod_train
-    depth_dir: Depth_nyu_linear_large_1x
+    data_dir: /root/autodl-tmp/dataset/cod10k_camo_train/TrainDataset/
+    depth_dir: Depth_dino
     split: train
   sampler:
     type: DefaultSampler
@@ -28,9 +28,9 @@ val_dataloader:
   batch_size: 10
   num_workers: 8
   dataset: 
-    type: COD10K_TEST
-    data_dir: /root/autodl-tmp/dataset/cod10k_test
-    depth_dir: Depth_nyu_linear_large_1x
+    type: COD_TEST
+    data_dir: /root/autodl-tmp/dataset/cod10k_test/test
+    depth_dir: Depth_dino
     split: val
   sampler:
     type: DefaultSampler
