@@ -7,7 +7,7 @@ from PIL import Image
 import torch
 
 @export
-class CAMO_TEST(Dataset):
+class COD_TEST(Dataset):
     """Load data for COD testing on testing set of CAMO"""
 
     def __init__(self, data_dir: str, depth_dir: str, split: str, image_size: Optional[Union[tuple, list]] = None):

@@ -7,6 +7,7 @@ train_cfg:
   by_epoch: &by_epoch True
   max_epochs: &max_epochs 80
   val_interval: 80
+  val_interval: 80
 val_cfg: {}
 find_unused_parameters: True
 
