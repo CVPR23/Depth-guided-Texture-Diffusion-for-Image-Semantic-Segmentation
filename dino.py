@@ -118,7 +118,7 @@ def load_config_from_url(url: str) -> str:
 
 
 HEAD_DATASET = "nyu" # in ("nyu", "kitti")
-HEAD_TYPE = "linear" # in ("linear", "linear4", "dpt")
+HEAD_TYPE = "dpt" # in ("linear", "linear4", "dpt")
 
 
 DINOV2_BASE_URL = "https://dl.fbaipublicfiles.com/dinov2"
@@ -156,15 +156,15 @@ image = load_image_from_url(EXAMPLE_IMAGE_URL)
 
 import os
 from tqdm import tqdm
-path = '/root/autodl-tmp/dataset/nc4k/train/Image/' #TestDataset/STERE/RGB
-save_path = '/root/autodl-tmp/dataset/nc4k/train/Depth_dino/' #TestDataset/STERE
+path = '/root/autodl-tmp/dataset/CAMO/Image/' #TestDataset/STERE/RGB
+save_path = '/root/autodl-tmp/dataset/CAMO/Depth_dpt/' #TestDataset/STERE
 
 if not os.path.exists(save_path):
     os.mkdir(save_path)
 i = 0
 for filename in tqdm(os.listdir(path)):
     i+=1
-    if i>0:
+    if i>178:
         if (filename.endswith(".jpg") or filename.endswith(".png")):  # 假设只处理.jpg格式的图片文件
             image_path = os.path.join(path, filename)  # 图片文件的完整路径
 

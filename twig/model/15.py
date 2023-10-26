@@ -214,17 +214,17 @@ class newy15(Hook):
         # msg = model.sam.load_state_dict(checkpoint, strict=False)
         # print(msg)
 
-    # def before_val(self, runner):
-    #     model = runner.model.module if isinstance(runner.model, MMDistributedDataParallel) else runner.model
+    def before_val(self, runner):
+        model = runner.model.module if isinstance(runner.model, MMDistributedDataParallel) else runner.model
 
-    #     # Load checkpoint of hitnet 
-    #     pretrain = 'output/prompt_nores/epoch_80.pth'
-    #     checkpoint = torch.load(pretrain, map_location='cpu')
-    #     print("Load pre-trained checkpoint from: %s" % pretrain)
-    #     if 'model' in checkpoint:
-    #         checkpoint = checkpoint['model']
-    #     msg = model.load_state_dict(checkpoint['state_dict'], strict=False)
-    #     print(msg)
+        # Load checkpoint of hitnet 
+        pretrain = 'output/popnet_depth/epoch_80.pth'
+        checkpoint = torch.load(pretrain, map_location='cpu')
+        print("Load pre-trained checkpoint from: %s" % pretrain)
+        if 'model' in checkpoint:
+            checkpoint = checkpoint['model']
+        msg = model.load_state_dict(checkpoint['state_dict'], strict=False)
+        print(msg)
 
 
 
@@ -999,10 +999,10 @@ class Depth_prompt(nn.Module):
         self.depth = depth
         self.input_dim = embed_dim#input_dim
 
-        self.shared_mlp = nn.Linear(self.input_dim//self.scale_factor, 1)#self.input_dim//self.scale_factor, self.embed_dim)
+        self.shared_mlp = nn.Linear(self.embed_dim//self.scale_factor, 1)#self.input_dim//self.scale_factor, self.embed_dim)
         self.embedding_generator = nn.Linear(self.input_dim, self.input_dim//self.scale_factor)
         self.depth_adapter = nn.Sequential(
-            nn.Linear(1,self.input_dim//self.scale_factor)
+            nn.Linear(1, self.embed_dim//self.scale_factor)#self.input_dim//self.scale_factor)
         )
         
         # self.embedding_generator = nn.Linear(self.input_dim, self.input_dim//self.scale_factor)
@@ -1010,7 +1010,7 @@ class Depth_prompt(nn.Module):
         for i in range(self.depth):
             lightweight_mlp = nn.Sequential(
                 # nn.GELU(),
-                nn.Linear(self.input_dim//self.scale_factor,self.input_dim//self.scale_factor),#self.input_dim//self.scale_factor, self.input_dim//self.scale_factor),
+                nn.Linear(self.embed_dim//self.scale_factor,self.embed_dim//self.scale_factor),#self.input_dim//self.scale_factor, self.input_dim//self.scale_factor),
                 nn.GELU(),
             )
             setattr(self, 'lightweight_mlp_{}'.format(str(i)), lightweight_mlp)
@@ -1036,8 +1036,8 @@ class Depth_prompt(nn.Module):
 
     def forward(self, depth, cues, cross=False):
         N, C, H, W = depth.shape
-        depth_feature = depth.view(N, C, H*W).permute(0, 2, 1)
-        depth_feature = self.embedding_generator(depth_feature)
+        # depth_feature = depth.view(N, C, H*W).permute(0, 2, 1)
+        # depth_feature = self.embedding_generator(depth_feature)
         N, C, H, W = cues.shape
         ori_cues= cues
         prompts = []
@@ -1055,7 +1055,7 @@ class Depth_prompt(nn.Module):
         cues = cues.flatten(2).permute(0, 2, 1)
         if self.fusion == True:
             adapted_cues = self.depth_adapter(cues)
-            fused = adapted_cues
+            fused = adapted_cues#+depth_feature#
         for i in range(self.depth):
             lightweight_mlp = getattr(self, 'lightweight_mlp_{}'.format(str(i)))
             prompt = lightweight_mlp(fused) #* adapted_cues + adapted_cues
@@ -1145,7 +1145,7 @@ class PyramidVisionTransformerImpr(nn.Module):
 
 
         self.apply(self._init_weights)
-
+        self.batch = 0
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
             trunc_normal_(m.weight, std=.02)
@@ -1201,6 +1201,8 @@ class PyramidVisionTransformerImpr(nn.Module):
 
 
     def forward_features(self, x, pred_normal):
+        self.batch += 1
+
         B = x.shape[0]
         outs = []
 
@@ -1208,10 +1210,10 @@ class PyramidVisionTransformerImpr(nn.Module):
         x, H, W = self.patch_embed1(x)
 
         depth = F.interpolate(pred_normal, size=(self.cross_size, self.cross_size), mode='bilinear')
+
         B,N,C = x.shape
         reshape_x = F.interpolate(x.permute(0,2,1).reshape(B,C,H,W), size=(self.cross_size, self.cross_size), mode='bilinear')
         depth = self.depth_generator[0](reshape_x, depth)
-
 
         weights = self.propagation_weight_regressor_0(reshape_x)
 
@@ -1219,7 +1221,7 @@ class PyramidVisionTransformerImpr(nn.Module):
             
             embedding = self.encoder_0(depth[i].permute(0,2,1).reshape([B,1,self.cross_size,self.cross_size]))
             embedding = self.message_passing_0(embedding, weights)
-            depth[i] = self.decoder_0(embedding) 
+            depth[i] = self.decoder_0(embedding)
             depth[i] = F.interpolate(depth[i], size=(H,W), mode='bilinear').flatten(2).permute(0,2,1)
 
             x = blk(x+depth[i], H, W) #10, 176^2, 64

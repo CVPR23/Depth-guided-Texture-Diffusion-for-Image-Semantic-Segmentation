@@ -28,7 +28,7 @@ class Emeasure(BaseMetric):
             assert gt.dtype == np.uint8, gt.dtype
             for x, y in zip(pred, gt):          
                 self.evaluator.step(pred=x, gt=y)
-            em = self.evaluator.get_results()["em"]['adp']
+            em = self.evaluator.get_results()["em"]["curve"].max()#["em"]['adp']
         self.results.append({'em': em})
 
     def compute_metrics(self, results: list) -> dict:

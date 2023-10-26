@@ -29,7 +29,7 @@ class Fmeasure(BaseMetric):
             assert gt.dtype == np.uint8, gt.dtype  
             for x, y in zip(pred, gt):          
                 self.evaluator.step(pred=x, gt=y)
-            fm = self.evaluator.get_results()["fm"]['adp']
+            fm = self.evaluator.get_results()["fm"]["curve"].max()#["fm"]['adp']
         self.results.append({'fm': fm})
 
     def compute_metrics(self, results: list) -> dict:
