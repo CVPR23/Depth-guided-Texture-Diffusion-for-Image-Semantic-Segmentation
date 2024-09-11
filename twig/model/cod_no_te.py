@@ -33,7 +33,7 @@ import mmseg
 
 
 @export
-class newx15(BaseModel):
+class cod(BaseModel):
     """DQnet model"""
     def __init__(self, win_size: Optional[int]=None, filter_ratio: Optional[float]=None, 
                  using_depth: Optional[bool]=None, using_sam: Optional[bool]=None,
@@ -41,7 +41,7 @@ class newx15(BaseModel):
                  pretrain_sam: Optional[str]=None, head: Optional[object]=None):
         super().__init__()
 
-        self.hitnet = Hitnet(win_size=win_size)
+        self.hitnet = Hitnet()
         self.batch = 0
 
 
@@ -166,7 +166,7 @@ class newx15(BaseModel):
 
     
 @export
-class newy15(Hook):
+class cl_init(Hook):
     """Init with pretrained model"""
     priority = 'NORMAL'
 
@@ -205,6 +205,17 @@ class newy15(Hook):
         msg = model.hitnet.backbone.load_state_dict(checkpoint, strict=False)
         print(msg)
 
+        # # Load checkpoint of convnext 
+        # pretrain = 'pretrain/convnext_tiny_22k_1k_384.pth'#'pretrain/hitnet.pth'#
+        # checkpoint = torch.load(pretrain, map_location='cpu')
+        # print("Load pre-trained checkpoint from: %s" % pretrain)
+        # if 'model' in checkpoint:
+        #     checkpoint = checkpoint['model']
+        # msg = model.hitnet.backbone.prompt_encoder.encoder1.load_state_dict(checkpoint, strict=False)
+        # msg = model.hitnet.backbone.prompt_encoder.encoder2.load_state_dict(checkpoint, strict=False)
+        # # msg = model.hitnet.backbone.prompt_encoder.encoder2.load_state_dict(checkpoint, strict=False)
+        # print(msg)
+
         
 
         # # load pretrain for sam
@@ -218,7 +229,7 @@ class newy15(Hook):
         model = runner.model.module if isinstance(runner.model, MMDistributedDataParallel) else runner.model
 
         # Load checkpoint of hitnet 
-        pretrain = 'output/iter8/epoch_80.pth'
+        pretrain = 'output/cod_24/epoch_100.pth'
         checkpoint = torch.load(pretrain, map_location='cpu')
         print("Load pre-trained checkpoint from: %s" % pretrain)
         if 'model' in checkpoint:
@@ -575,10 +586,10 @@ class ORSNet(nn.Module):
         return x
 
 class Hitnet(nn.Module):
-    def __init__(self, channel=32,n_feat=32,scale_unetfeats=32,kernel_size=3,reduction=4,bias=False,act=nn.PReLU(),win_size=10):
+    def __init__(self, channel=32,n_feat=32,scale_unetfeats=32,kernel_size=3,reduction=4,bias=False,act=nn.PReLU()):
         super(Hitnet, self).__init__()
 
-        self.backbone = pvt_v2_b2(win_size=win_size)  # [64, 128, 320, 512]
+        self.backbone = pvt_v2_b2()  # [64, 128, 320, 512]
 
         # path = 'pretrain/pvt_v2_b2.pth'
         # save_model = torch.load(path)
@@ -913,6 +924,33 @@ class Interpolate(nn.Module):
 
 
     
+# main module of Texture diffuser
+class LayerNorm(nn.Module):
+    r""" LayerNorm that supports two data formats: channels_last (default) or channels_first. 
+    The ordering of the dimensions in the inputs. channels_last corresponds to inputs with 
+    shape (batch_size, height, width, channels) while channels_first corresponds to inputs 
+    with shape (batch_size, channels, height, width).
+    """
+    def __init__(self, normalized_shape, eps=1e-6, data_format="channels_last"):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(normalized_shape))
+        self.bias = nn.Parameter(torch.zeros(normalized_shape))
+        self.eps = eps
+        self.data_format = data_format
+        if self.data_format not in ["channels_last", "channels_first"]:
+            raise NotImplementedError 
+        self.normalized_shape = (normalized_shape, )
+    
+    def forward(self, x):
+        if self.data_format == "channels_last":
+            return F.layer_norm(x, self.normalized_shape, self.weight, self.bias, self.eps)
+        elif self.data_format == "channels_first":
+            u = x.mean(1, keepdim=True)
+            s = (x - u).pow(2).mean(1, keepdim=True)
+            x = (x - u) / torch.sqrt(s + self.eps)
+            x = self.weight[:, None, None] * x + self.bias[:, None, None]
+            return x
+
 class ShapePropWeightRegressor(nn.Module):
     def __init__(self, in_channels, latent_dim):
         super(ShapePropWeightRegressor, self).__init__()
@@ -924,28 +962,128 @@ class ShapePropWeightRegressor(nn.Module):
         weights = self.reg(x)
         return torch.sigmoid(weights)
 
-class ShapePropEncoder(nn.Module):
-    def __init__(self, in_channels, latent_dim):
-        super(ShapePropEncoder, self).__init__()
-        use_gn = False
-        # latent_dim = 24
-        dilation = 1
-        self.encoder = nn.Sequential(
-            # nn.Conv2d(in_channels, in_channels, kernel_size=3, stride=1, padding=dilation, dilation=dilation),
-            # nn.ReLU(True),
-            nn.Conv2d(in_channels, latent_dim, kernel_size=3, stride=1, padding=dilation, dilation=dilation),
 
-            nn.ReLU(True),
-            nn.Conv2d(latent_dim, latent_dim, kernel_size=3, stride=1, padding=dilation, dilation=dilation),
-            nn.ReLU(True),
-            nn.Conv2d(latent_dim, latent_dim, kernel_size=3, stride=1, padding=dilation, dilation=dilation),
+
+
+
+class EncoderBlock(nn.Module):
+    def __init__(self, in_channels):
+        super(EncoderBlock, self).__init__()
+        self.encoder1 = nn.Conv2d(in_channels, in_channels, kernel_size=7, padding=3, groups=in_channels)
+        self.encoder2 = nn.Sequential(
+            LayerNorm(in_channels, eps=1e-6),
+            nn.Linear(in_channels, 4 * in_channels),
+            nn.GELU(),
+            nn.Linear(4 * in_channels, in_channels),
         )
     def forward(self, x):
-        embedding = self.encoder(x)
-        return embedding
+        embedding = self.encoder1(x).permute(0, 2, 3, 1)
+        embedding = self.encoder2(embedding).permute(0, 3, 1, 2)
+        embedding = embedding + x
+        return embedding        
+
+class convnext_Block(nn.Module):
+    r""" ConvNeXt Block. There are two equivalent implementations:
+    (1) DwConv -> LayerNorm (channels_first) -> 1x1 Conv -> GELU -> 1x1 Conv; all in (N, C, H, W)
+    (2) DwConv -> Permute to (N, H, W, C); LayerNorm (channels_last) -> Linear -> GELU -> Linear; Permute back
+    We use (2) as we find it slightly faster in PyTorch
+    
+    Args:
+        dim (int): Number of input channels.
+        drop_path (float): Stochastic depth rate. Default: 0.0
+        layer_scale_init_value (float): Init value for Layer Scale. Default: 1e-6.
+    """
+    def __init__(self, dim, drop_path=0., layer_scale_init_value=1e-6):
+        super().__init__()
+        self.dwconv = nn.Conv2d(dim, dim, kernel_size=7, padding=3, groups=dim) # depthwise conv
+        self.norm = LayerNorm(dim, eps=1e-6)
+        self.pwconv1 = nn.Linear(dim, 4 * dim) # pointwise/1x1 convs, implemented with linear layers
+        self.act = nn.GELU()
+        self.pwconv2 = nn.Linear(4 * dim, dim)
+        self.gamma = nn.Parameter(layer_scale_init_value * torch.ones((dim)), 
+                                    requires_grad=True) if layer_scale_init_value > 0 else None
+        self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
+
+    def forward(self, x):
+        input = x
+        x = self.dwconv(x)
+        x = x.permute(0, 2, 3, 1) # (N, C, H, W) -> (N, H, W, C)
+        x = self.norm(x)
+        x = self.pwconv1(x)
+        x = self.act(x)
+        x = self.pwconv2(x)
+        if self.gamma is not None:
+            x = self.gamma * x
+        x = x.permute(0, 3, 1, 2) # (N, H, W, C) -> (N, C, H, W)
+
+        x = input + self.drop_path(x)
+        return x
+
+class ShapePropEncoder(nn.Module):
+    def __init__(self, in_channels, dim):
+        super(ShapePropEncoder, self).__init__()
+        self.downsample_layers = nn.ModuleList() # stem and 3 intermediate downsampling conv layers
+        dims = [dim//8,dim//4,dim//2,dim]
+        stem = nn.Sequential(
+            nn.Conv2d(in_channels, dims[0], kernel_size=4, stride=4),
+            LayerNorm(dims[0], eps=1e-6, data_format="channels_first")
+        )
+        self.downsample_layers.append(stem)
+        for i in range(3):
+            downsample_layer = nn.Sequential(
+                    LayerNorm(dims[i], eps=1e-6, data_format="channels_first"),
+                    nn.Conv2d(dims[i], dims[i+1], kernel_size=2, stride=2),
+            )
+            self.downsample_layers.append(downsample_layer)
+            
+        self.stages = nn.ModuleList() # 4 feature resolution stages, each consisting of multiple residual blocks
+
+        drop_path_rate=0.4
+        # depths = [3, 3, 27, 3]
+        depths = [1,1,3,1]
+
+        layer_scale_init_value=1.0
+        dp_rates=[x.item() for x in torch.linspace(0, drop_path_rate, sum(depths))] 
+        cur = 0
+        for i in range(4):
+            stage = nn.Sequential(
+                *[convnext_Block(dim=dims[i], drop_path=dp_rates[cur + j], 
+                layer_scale_init_value=layer_scale_init_value) for j in range(depths[i])]
+            )
+            self.stages.append(stage)
+            cur += depths[i]
+
+    def forward(self, x):
+        for i in range(4):
+            x = self.downsample_layers[i](x)
+            x = self.stages[i](x)
+        return x
+
+# class ShapePropEncoder(nn.Module):
+#     def __init__(self, in_channels, latent_dim):
+#         super(ShapePropEncoder, self).__init__()
+#         self.preEncoder = nn.Sequential(nn.Conv2d(in_channels, latent_dim, kernel_size=1, stride=1),
+#                     LayerNorm(latent_dim, eps=1e-6, data_format="channels_first"))
+#         # self.encoder1 = nn.Conv2d(latent_dim, latent_dim, kernel_size=7, padding=3, groups=latent_dim),
+#         # self.encoder2 = nn.Sequential(
+#         #     LayerNorm(latent_dim, eps=1e-6),
+#         #     nn.Linear(latent_dim, 4 * latent_dim),
+#         #     nn.GELU(),
+#         #     nn.Linear(4 * latent_dim, latent_dim),
+#         # )
+#         self.depth = 2
+#         self.Encoder = nn.Sequential(
+#             *[EncoderBlock(latent_dim) for i in range(self.depth)]
+#         )
+
+#     def forward(self, x):
+#         embedding = self.preEncoder(x)
+#         for i in range(self.depth):
+#             embedding = self.Encoder[i](embedding)
+#         return embedding
 
 class MessagePassing(nn.Module):
-    def __init__(self, k=3, max_step=3, sym_norm=False):
+    def __init__(self, latent_dim, k=3, max_step=6, sym_norm=False):
         super(MessagePassing, self).__init__()
         self.k = k
         self.size = k * k
@@ -956,6 +1094,7 @@ class MessagePassing(nn.Module):
         eps = 1e-5
         n, c, h, w = input.size()
         wc = weight.shape[1] // self.size
+
         weight = weight.view(n, wc, self.size, h * w)
         if self.sym_norm:
             # symmetric normalization D^(-1/2)AD^(-1/2)
@@ -969,7 +1108,7 @@ class MessagePassing(nn.Module):
         for i in range(max(h, w) if self.max_step < 0 else self.max_step):
             x = F.unfold(x, kernel_size=self.k, padding=1).view(n, c, self.size, h * w)
             x = (x * norm_weight).sum(2).view(n, c, h, w)
-        return x
+        return x 
 
 class ShapePropDecoder(nn.Module):
     def __init__(self, out_dim, latent_dim):
@@ -982,50 +1121,57 @@ class ShapePropDecoder(nn.Module):
             nn.ReLU(True),
             nn.Conv2d(latent_dim, latent_dim, kernel_size=3, stride=1, padding=dilation, dilation=dilation),
             nn.ReLU(True),
-
-            
             nn.Conv2d(latent_dim, out_dim, kernel_size=3, stride=1, padding=dilation, dilation=dilation),
+            # nn.Conv2d(latent_dim, out_dim, kernel_size=3) # depthwise conv
         )
-
     def forward(self, embedding):
         x = self.decoder(embedding)
         return x
 
-class Depth_prompt(nn.Module):
-    def __init__(self, scale_factor, input_dim, embed_dim, depth, win_size, fusion=False):
-        super(Depth_prompt, self).__init__()
-        self.scale_factor = 4#scale_factor
+class prompt_encoder(nn.Module):
+    def __init__(self, latent_dim, embed_dim, depth, fusion=False):
+        super(prompt_encoder, self).__init__()
         self.embed_dim = embed_dim
         self.depth = depth
-        self.input_dim = embed_dim#input_dim
 
-        self.shared_mlp = nn.Linear(self.embed_dim//self.scale_factor, 1)#self.input_dim//self.scale_factor, self.embed_dim)
-        self.embedding_generator = nn.Linear(self.input_dim, self.input_dim//self.scale_factor)
-        self.depth_adapter = nn.Sequential(
-            nn.Linear(1, self.embed_dim//self.scale_factor)#self.input_dim//self.scale_factor)
-        )
+        # self.shared_conv = nn.Conv2d(self.embed_dim//self.scale_factor, self.embed_dim, kernel_size=3,padding=1)
+        # self.depth_adapter = nn.Sequential(
+        #     nn.Conv2d(1, self.embed_dim//self.scale_factor, kernel_size=3, padding=1)
+        # )
+        # for i in range(self.depth):
+        #     lightweight_mlp = nn.Sequential(
+        #         # nn.GELU(),
+        #         nn.Conv2d(self.embed_dim//self.scale_factor,self.embed_dim//self.scale_factor, kernel_size=3, padding=1),#self.input_dim//self.scale_factor, self.input_dim//self.scale_factor),
+        #         nn.ReLU(),
+        #     )
+        #     setattr(self, 'lightweight_mlp_{}'.format(str(i)), lightweight_mlp)
+
+        # propagation model
+        self.propagation_weight_regressor = ShapePropWeightRegressor(3, latent_dim)
+        # self.encoder0 = ShapePropEncoder(4, latent_dim//3)
+        self.encoder1 = ShapePropEncoder(1, latent_dim//2)
+        self.encoder2 = ShapePropEncoder(3, latent_dim//2)
+
+        self.message_passing = MessagePassing(latent_dim, sym_norm=False)
+
+        self.freq_nums = 0.1
         
-        # self.embedding_generator = nn.Linear(self.input_dim, self.input_dim//self.scale_factor)
-        self.fusion = fusion
-        for i in range(self.depth):
-            lightweight_mlp = nn.Sequential(
-                # nn.GELU(),
-                nn.Linear(self.embed_dim//self.scale_factor,self.embed_dim//self.scale_factor),#self.input_dim//self.scale_factor, self.input_dim//self.scale_factor),
-                nn.GELU(),
-            )
-            setattr(self, 'lightweight_mlp_{}'.format(str(i)), lightweight_mlp)
-            # if self.fusion == True:
-            #     cross = WindowFusion(self.embed_dim//self.scale_factor, window_size=(win_size, win_size))
-            #     setattr(self, 'cross_{}'.format(str(i)), cross)
-        # self.cross = WindowFusion(self.embed_dim//self.scale_factor, window_size=(win_size, win_size))
+    def fft(self, x, rate):
+        # the smaller rate, the smoother; the larger rate, the darker
+        # rate = 4, 8, 16, 32
+        mask = torch.zeros(x.shape).cuda()
+        w, h = x.shape[-2:]
+        line = int((w * h * rate) ** .5 // 2)
+        mask[:, :, w//2-line:w//2+line, h//2-line:h//2+line] = 1
+        fft = torch.fft.fftshift(torch.fft.fft2(x, norm="forward"))
+        fft = fft * (1 - mask)
+        fr = fft.real
+        fi = fft.imag
+        fft_hires = torch.fft.ifftshift(torch.complex(fr, fi))
+        inv = torch.fft.ifft2(fft_hires, norm="forward").real
+        inv = torch.abs(inv)
+        return inv   
 
-
-        # # propagation model
-        # latent_dim = self.input_dim//self.scale_factor
-        # self.propagation_weight_regressor = ShapePropWeightRegressor(embed_dim, latent_dim)
-        # self.encoder = ShapePropEncoder(1, latent_dim)
-        # self.message_passing = MessagePassing(sym_norm=False)
-        # self.decoder = ShapePropDecoder(embed_dim//self.scale_factor, latent_dim)
 
     def init_embeddings(self, x):
         x = x.permute(0,3,1,2).contiguous()
@@ -1034,40 +1180,55 @@ class Depth_prompt(nn.Module):
         return self.embedding_generator(x)
 
 
-    def forward(self, depth, cues, cross=False):
-        N, C, H, W = depth.shape
-        # depth_feature = depth.view(N, C, H*W).permute(0, 2, 1)
-        # depth_feature = self.embedding_generator(depth_feature)
-        N, C, H, W = cues.shape
-        ori_cues= cues
+    def forward(self, image, cues, cross=False):
+
+        H = 12
+        x = F.interpolate(image, size=([H,H]), mode='bilinear')
+        # cues = F.interpolate(cues, size=([H,H]), mode='bilinear')
+
+
+        # x = self.fft(x, self.freq_nums)
+
+        # x = self.prompt_generator(x)#.flatten(2).permute(0, 2, 1)
         prompts = []
 
 
-        # # propagation
-        # weights = self.propagation_weight_regressor(depth)
-        # saliency = ori_cues
-        # embedding = self.encoder(saliency)
+        # propagation  
+        weights = self.propagation_weight_regressor(x)
+        # embedding0 = self.encoder0(torch.cat([cues, image], dim=1))
+        embedding1 = self.encoder1(cues)
+        embedding2 = self.encoder2(image)
+        embedding = torch.cat([embedding1,embedding2],dim=1)
+        embedding = self.message_passing(embedding, weights)
+        # embedding = self.encoder(torch.cat([cues, image], dim=1))
         # embedding = self.message_passing(embedding, weights)
-        # shape_activation = self.decoder(embedding); cues = shape_activation
-
         
-        # prompt generating
-        cues = cues.flatten(2).permute(0, 2, 1)
-        if self.fusion == True:
-            adapted_cues = self.depth_adapter(cues)
-            fused = adapted_cues#+depth_feature#
+
+        return embedding
+
+class prompt_decoder(nn.Module):
+    def __init__(self, latent_dim, embed_dim, depth, fusion=False):
+        super(prompt_decoder, self).__init__()
+        self.depth = depth
+        # for i in range(depth):
+        self.decoder = ShapePropDecoder(embed_dim, latent_dim)
+            # setattr(self, 'decoder_{}'.format(str(i)), decoder)
+
+    def forward(self, embedding, cross=False):
+        # adapter
+        prompts=[]
         for i in range(self.depth):
-            lightweight_mlp = getattr(self, 'lightweight_mlp_{}'.format(str(i)))
-            prompt = lightweight_mlp(fused) #* adapted_cues + adapted_cues
-            prompts.append(self.shared_mlp(prompt)+cues)
-
-        return prompts  
-
+            # decoder = getattr(self, 'decoder_{}'.format(str(i)))
+            prompt = self.decoder(embedding)
+            prompt = prompt#torch.cat((torch.zeros(B,1,C).cuda(), prompt.flatten(2).permute(0,2,1)), dim=1)
+            prompts.append(prompt)
+        return prompts 
+    
 class PyramidVisionTransformerImpr(nn.Module):
     def __init__(self, img_size=224, patch_size=16, in_chans=3, num_classes=1000, embed_dims=[64, 128, 256, 512],
                  num_heads=[1, 2, 4, 8], mlp_ratios=[4, 4, 4, 4], qkv_bias=False, qk_scale=None, drop_rate=0.,
                  attn_drop_rate=0., drop_path_rate=0., norm_layer=nn.LayerNorm,
-                 depths=[3, 4, 6, 3], sr_ratios=[8, 4, 2, 1], win_size=10):
+                 depths=[3, 4, 6, 3], sr_ratios=[8, 4, 2, 1]):
         super().__init__()
         self.num_classes = num_classes
         self.depths = depths
@@ -1116,33 +1277,11 @@ class PyramidVisionTransformerImpr(nn.Module):
             for i in range(depths[3])])
         self.norm4 = norm_layer(embed_dims[3])
 
-        # depth prompt
-        self.dino_dim = 768#768
-        self.scale_factor = 4
-        win_size=22
-        self.depth_generator = nn.ModuleList([
-            Depth_prompt(self.scale_factor, self.dino_dim, embed_dims[0], self.depths[0], win_size, True),
-            Depth_prompt(self.scale_factor, self.dino_dim, embed_dims[1], self.depths[1], win_size, True),
-            Depth_prompt(self.scale_factor, self.dino_dim, embed_dims[2], self.depths[2], win_size, True),
-            Depth_prompt(self.scale_factor, self.dino_dim, embed_dims[3], self.depths[3], win_size, True),
-            ])
-        self.cross_size = 44
-
-        #propagation
-        latent_dim = 24
-        for i in range(4):
-            propagation_weight_regressor = ShapePropWeightRegressor(embed_dims[i], latent_dim)
-            setattr(self, 'propagation_weight_regressor_{}'.format(str(i)), propagation_weight_regressor)
-
-            encoder = ShapePropEncoder(1, latent_dim)#embed_dims[i], latent_dim)
-            setattr(self, 'encoder_{}'.format(str(i)), encoder)
-
-            message_passing = MessagePassing(sym_norm=False)
-            setattr(self, 'message_passing_{}'.format(str(i)), message_passing)
-
-            decoder = ShapePropDecoder(embed_dims[i], latent_dim)
-            setattr(self, 'decoder_{}'.format(str(i)), decoder)
-
+        # for texture diffuser
+        self.latent_dim = 24
+        self.prompt_encoder = prompt_encoder(self.latent_dim, embed_dims, depths, True) 
+        self.prompt_decoder = nn.Sequential(*[prompt_decoder(self.latent_dim, embed_dims[i], depths[i], True) for i in range(len(depths))])
+        # nn.Sequential(*[prompt_decoder(self.scale_factor, embed_dims[i], depths[i], True) for i in range(len(depths))])
 
         self.apply(self._init_weights)
         self.batch = 0
@@ -1200,53 +1339,35 @@ class PyramidVisionTransformerImpr(nn.Module):
 
 
 
-    def forward_features(self, x, pred_normal):
+    def forward_features(self, x, depth):
         self.batch += 1
 
         B = x.shape[0]
         outs = []
 
         # stage 1
+        image=x
         x, H, W = self.patch_embed1(x)
 
-        depth = F.interpolate(pred_normal, size=(self.cross_size, self.cross_size), mode='bilinear')
-
+        # depth = F.interpolate(pred_normal, size=(88, 88), mode='bilinear')
         B,N,C = x.shape
-        reshape_x = F.interpolate(x.permute(0,2,1).reshape(B,C,H,W), size=(self.cross_size, self.cross_size), mode='bilinear')
-        depth = self.depth_generator[0](reshape_x, depth)
+        embedding = self.prompt_encoder(image, depth)
 
-        weights = self.propagation_weight_regressor_0(reshape_x)
-
+        prompt = self.prompt_decoder[0](embedding)
         for i, blk in enumerate(self.block1):
-            
-            embedding = self.encoder_0(depth[i].permute(0,2,1).reshape([B,1,self.cross_size,self.cross_size]))
-            embedding = self.message_passing_0(embedding, weights)
-            depth[i] = self.decoder_0(embedding)
-            depth[i] = F.interpolate(depth[i], size=(H,W), mode='bilinear').flatten(2).permute(0,2,1)
-
-            x = blk(x+depth[i], H, W) #10, 176^2, 64
+            prompt[i] = F.interpolate(prompt[i], size=(H,W), mode='bilinear').flatten(2).permute(0,2,1).reshape(x.shape)
+            x = blk(x, H, W)#+depth[i], H, W) #10, 176^2, 64
         x = self.norm1(x)
         x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
         outs.append(x)
 
         # stage 2
-        x, H, W = self.patch_embed2(x)
+        x, H, W = self.patch_embed2(x)       
 
-        depth = F.interpolate(pred_normal, size=(self.cross_size,self.cross_size), mode='bilinear')
-        B,N,C = x.shape
-        reshape_x = F.interpolate(x.permute(0,2,1).reshape(B,C,H,W), size=(self.cross_size,self.cross_size), mode='bilinear')
-        depth = self.depth_generator[1](reshape_x, depth)
-        
-        weights = self.propagation_weight_regressor_1(reshape_x)
-
+        prompt = self.prompt_decoder[1](embedding)
         for i, blk in enumerate(self.block2):
-            
-            embedding = self.encoder_1(depth[i].permute(0,2,1).reshape([B,1,self.cross_size,self.cross_size]))
-            embedding = self.message_passing_1(embedding, weights)
-            depth[i] = self.decoder_1(embedding) 
-            depth[i] = F.interpolate(depth[i], size=(H,W), mode='bilinear').flatten(2).permute(0,2,1)
-
-            x = blk(x+depth[i], H, W) #10, 88^2, 128
+            prompt[i] = F.interpolate(prompt[i], size=(H,W), mode='bilinear').flatten(2).permute(0,2,1).reshape(x.shape)
+            x = blk(x, H, W)#+depth[i], H, W) #10, 176^2, 64
         x = self.norm2(x)
         x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
         outs.append(x)
@@ -1254,21 +1375,10 @@ class PyramidVisionTransformerImpr(nn.Module):
         # stage 3
         x, H, W = self.patch_embed3(x)
 
-        depth = F.interpolate(pred_normal, size=(self.cross_size,self.cross_size), mode='bilinear')
-        B,N,C = x.shape
-        reshape_x = F.interpolate(x.permute(0,2,1).reshape(B,C,H,W), size=(self.cross_size,self.cross_size), mode='bilinear')
-        depth = self.depth_generator[2](reshape_x, depth)
-
-        weights = self.propagation_weight_regressor_2(reshape_x)
-
+        prompt = self.prompt_decoder[2](embedding)
         for i, blk in enumerate(self.block3):
-            
-            embedding = self.encoder_2(depth[i].permute(0,2,1).reshape([B,1,self.cross_size,self.cross_size]))
-            embedding = self.message_passing_2(embedding, weights)
-            depth[i] = self.decoder_2(embedding) 
-            depth[i] = F.interpolate(depth[i], size=(H,W), mode='bilinear').flatten(2).permute(0,2,1)
-
-            x = blk(x+depth[i], H, W) #10, 44^2, 320
+            prompt[i] = F.interpolate(prompt[i], size=(H,W), mode='bilinear').flatten(2).permute(0,2,1).reshape(x.shape)
+            x = blk(x, H, W)#+depth[i], H, W) #10, 176^2, 64
         x = self.norm3(x)
         x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
         outs.append(x)
@@ -1276,21 +1386,10 @@ class PyramidVisionTransformerImpr(nn.Module):
         # stage 4
         x, H, W = self.patch_embed4(x)
 
-        depth = F.interpolate(pred_normal, size=(self.cross_size,self.cross_size), mode='bilinear')
-        B,N,C = x.shape
-        reshape_x = F.interpolate(x.permute(0,2,1).reshape(B,C,H,W), size=(self.cross_size,self.cross_size), mode='bilinear')
-        depth = self.depth_generator[3](reshape_x, depth)
-        
-        weights = self.propagation_weight_regressor_3(reshape_x)
-
+        prompt = self.prompt_decoder[3](embedding)
         for i, blk in enumerate(self.block4):
-            
-            embedding = self.encoder_3(depth[i].permute(0,2,1).reshape([B,1,self.cross_size,self.cross_size]))
-            embedding = self.message_passing_3(embedding, weights)
-            depth[i] = self.decoder_3(embedding) 
-            depth[i] = F.interpolate(depth[i], size=(H,W), mode='bilinear').flatten(2).permute(0,2,1)
-
-            x = blk(x+depth[i], H, W) #10, 22^2, 512
+            prompt[i] = F.interpolate(prompt[i], size=(H,W), mode='bilinear').flatten(2).permute(0,2,1).reshape(x.shape)
+            x = blk(x, H, W)#+depth[i], H, W) #10, 176^2, 64
         x = self.norm4(x)
         x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
         outs.append(x)
@@ -1572,7 +1671,7 @@ class pvt_v2_b2(PyramidVisionTransformerImpr):
         super(pvt_v2_b2, self).__init__(
             patch_size=4, embed_dims=[64, 128, 320, 512], num_heads=[1, 2, 5, 8], mlp_ratios=[8, 8, 4, 4],
             qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), depths=[3, 4, 6, 3], sr_ratios=[8, 4, 2, 1],
-            drop_rate=0.0, drop_path_rate=0.1, win_size=10)
+            drop_rate=0.0, drop_path_rate=0.1)
 
 @register_model
 class pvt_v2_b3(PyramidVisionTransformerImpr):

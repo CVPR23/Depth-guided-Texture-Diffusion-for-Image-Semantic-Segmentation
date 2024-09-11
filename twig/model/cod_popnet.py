@@ -24,7 +24,7 @@ from torch.nn.functional import threshold, normalize
 import random
 from timm import create_model
 import os
-
+import torch.utils.model_zoo as model_zoo
 # current_path = os.getcwd()
 # print("当前路径为：" + current_path)
 # from timm.models import build_model_with_cfg
@@ -33,7 +33,7 @@ import mmseg
 
 
 @export
-class newx15(BaseModel):
+class cod_popnet(BaseModel):
     """DQnet model"""
     def __init__(self, win_size: Optional[int]=None, filter_ratio: Optional[float]=None, 
                  using_depth: Optional[bool]=None, using_sam: Optional[bool]=None,
@@ -41,7 +41,7 @@ class newx15(BaseModel):
                  pretrain_sam: Optional[str]=None, head: Optional[object]=None):
         super().__init__()
 
-        self.hitnet = Hitnet(win_size=win_size)
+        self.hitnet = Hitnet()
         self.batch = 0
 
 
@@ -166,7 +166,7 @@ class newx15(BaseModel):
 
     
 @export
-class newy15(Hook):
+class popnet_init(Hook):
     """Init with pretrained model"""
     priority = 'NORMAL'
 
@@ -205,6 +205,17 @@ class newy15(Hook):
         msg = model.hitnet.backbone.load_state_dict(checkpoint, strict=False)
         print(msg)
 
+        # # Load checkpoint of convnext 
+        # pretrain = 'pretrain/convnext_tiny_22k_1k_384.pth'#'pretrain/hitnet.pth'#
+        # checkpoint = torch.load(pretrain, map_location='cpu')
+        # print("Load pre-trained checkpoint from: %s" % pretrain)
+        # if 'model' in checkpoint:
+        #     checkpoint = checkpoint['model']
+        # msg = model.hitnet.backbone.prompt_encoder.encoder1.load_state_dict(checkpoint, strict=False)
+        # msg = model.hitnet.backbone.prompt_encoder.encoder2.load_state_dict(checkpoint, strict=False)
+        # # msg = model.hitnet.backbone.prompt_encoder.encoder2.load_state_dict(checkpoint, strict=False)
+        # print(msg)
+
         
 
         # # load pretrain for sam
@@ -218,7 +229,7 @@ class newy15(Hook):
         model = runner.model.module if isinstance(runner.model, MMDistributedDataParallel) else runner.model
 
         # Load checkpoint of hitnet 
-        pretrain = 'output/iter8/epoch_80.pth'
+        pretrain = 'output/cod_popnet/epoch_100.pth'
         checkpoint = torch.load(pretrain, map_location='cpu')
         print("Load pre-trained checkpoint from: %s" % pretrain)
         if 'model' in checkpoint:
@@ -575,10 +586,10 @@ class ORSNet(nn.Module):
         return x
 
 class Hitnet(nn.Module):
-    def __init__(self, channel=32,n_feat=32,scale_unetfeats=32,kernel_size=3,reduction=4,bias=False,act=nn.PReLU(),win_size=10):
+    def __init__(self, channel=32,n_feat=32,scale_unetfeats=32,kernel_size=3,reduction=4,bias=False,act=nn.PReLU()):
         super(Hitnet, self).__init__()
 
-        self.backbone = pvt_v2_b2(win_size=win_size)  # [64, 128, 320, 512]
+        self.backbone = pvt_v2_b2()  # [64, 128, 320, 512]
 
         # path = 'pretrain/pvt_v2_b2.pth'
         # save_model = torch.load(path)
@@ -913,6 +924,33 @@ class Interpolate(nn.Module):
 
 
     
+# main module of Texture diffuser
+class LayerNorm(nn.Module):
+    r""" LayerNorm that supports two data formats: channels_last (default) or channels_first. 
+    The ordering of the dimensions in the inputs. channels_last corresponds to inputs with 
+    shape (batch_size, height, width, channels) while channels_first corresponds to inputs 
+    with shape (batch_size, channels, height, width).
+    """
+    def __init__(self, normalized_shape, eps=1e-6, data_format="channels_last"):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(normalized_shape))
+        self.bias = nn.Parameter(torch.zeros(normalized_shape))
+        self.eps = eps
+        self.data_format = data_format
+        if self.data_format not in ["channels_last", "channels_first"]:
+            raise NotImplementedError 
+        self.normalized_shape = (normalized_shape, )
+    
+    def forward(self, x):
+        if self.data_format == "channels_last":
+            return F.layer_norm(x, self.normalized_shape, self.weight, self.bias, self.eps)
+        elif self.data_format == "channels_first":
+            u = x.mean(1, keepdim=True)
+            s = (x - u).pow(2).mean(1, keepdim=True)
+            x = (x - u) / torch.sqrt(s + self.eps)
+            x = self.weight[:, None, None] * x + self.bias[:, None, None]
+            return x
+
 class ShapePropWeightRegressor(nn.Module):
     def __init__(self, in_channels, latent_dim):
         super(ShapePropWeightRegressor, self).__init__()
@@ -924,28 +962,128 @@ class ShapePropWeightRegressor(nn.Module):
         weights = self.reg(x)
         return torch.sigmoid(weights)
 
-class ShapePropEncoder(nn.Module):
-    def __init__(self, in_channels, latent_dim):
-        super(ShapePropEncoder, self).__init__()
-        use_gn = False
-        # latent_dim = 24
-        dilation = 1
-        self.encoder = nn.Sequential(
-            # nn.Conv2d(in_channels, in_channels, kernel_size=3, stride=1, padding=dilation, dilation=dilation),
-            # nn.ReLU(True),
-            nn.Conv2d(in_channels, latent_dim, kernel_size=3, stride=1, padding=dilation, dilation=dilation),
 
-            nn.ReLU(True),
-            nn.Conv2d(latent_dim, latent_dim, kernel_size=3, stride=1, padding=dilation, dilation=dilation),
-            nn.ReLU(True),
-            nn.Conv2d(latent_dim, latent_dim, kernel_size=3, stride=1, padding=dilation, dilation=dilation),
+
+
+
+class EncoderBlock(nn.Module):
+    def __init__(self, in_channels):
+        super(EncoderBlock, self).__init__()
+        self.encoder1 = nn.Conv2d(in_channels, in_channels, kernel_size=7, padding=3, groups=in_channels)
+        self.encoder2 = nn.Sequential(
+            LayerNorm(in_channels, eps=1e-6),
+            nn.Linear(in_channels, 4 * in_channels),
+            nn.GELU(),
+            nn.Linear(4 * in_channels, in_channels),
         )
     def forward(self, x):
-        embedding = self.encoder(x)
-        return embedding
+        embedding = self.encoder1(x).permute(0, 2, 3, 1)
+        embedding = self.encoder2(embedding).permute(0, 3, 1, 2)
+        embedding = embedding + x
+        return embedding        
+
+class convnext_Block(nn.Module):
+    r""" ConvNeXt Block. There are two equivalent implementations:
+    (1) DwConv -> LayerNorm (channels_first) -> 1x1 Conv -> GELU -> 1x1 Conv; all in (N, C, H, W)
+    (2) DwConv -> Permute to (N, H, W, C); LayerNorm (channels_last) -> Linear -> GELU -> Linear; Permute back
+    We use (2) as we find it slightly faster in PyTorch
+    
+    Args:
+        dim (int): Number of input channels.
+        drop_path (float): Stochastic depth rate. Default: 0.0
+        layer_scale_init_value (float): Init value for Layer Scale. Default: 1e-6.
+    """
+    def __init__(self, dim, drop_path=0., layer_scale_init_value=1e-6):
+        super().__init__()
+        self.dwconv = nn.Conv2d(dim, dim, kernel_size=7, padding=3, groups=dim) # depthwise conv
+        self.norm = LayerNorm(dim, eps=1e-6)
+        self.pwconv1 = nn.Linear(dim, 4 * dim) # pointwise/1x1 convs, implemented with linear layers
+        self.act = nn.GELU()
+        self.pwconv2 = nn.Linear(4 * dim, dim)
+        self.gamma = nn.Parameter(layer_scale_init_value * torch.ones((dim)), 
+                                    requires_grad=True) if layer_scale_init_value > 0 else None
+        self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
+
+    def forward(self, x):
+        input = x
+        x = self.dwconv(x)
+        x = x.permute(0, 2, 3, 1) # (N, C, H, W) -> (N, H, W, C)
+        x = self.norm(x)
+        x = self.pwconv1(x)
+        x = self.act(x)
+        x = self.pwconv2(x)
+        if self.gamma is not None:
+            x = self.gamma * x
+        x = x.permute(0, 3, 1, 2) # (N, H, W, C) -> (N, C, H, W)
+
+        x = input + self.drop_path(x)
+        return x
+
+class ShapePropEncoder(nn.Module):
+    def __init__(self, in_channels, dim):
+        super(ShapePropEncoder, self).__init__()
+        self.downsample_layers = nn.ModuleList() # stem and 3 intermediate downsampling conv layers
+        dims = [dim//8,dim//4,dim//2,dim]
+        stem = nn.Sequential(
+            nn.Conv2d(in_channels, dims[0], kernel_size=4, stride=4),
+            LayerNorm(dims[0], eps=1e-6, data_format="channels_first")
+        )
+        self.downsample_layers.append(stem)
+        for i in range(3):
+            downsample_layer = nn.Sequential(
+                    LayerNorm(dims[i], eps=1e-6, data_format="channels_first"),
+                    nn.Conv2d(dims[i], dims[i+1], kernel_size=2, stride=2),
+            )
+            self.downsample_layers.append(downsample_layer)
+            
+        self.stages = nn.ModuleList() # 4 feature resolution stages, each consisting of multiple residual blocks
+
+        drop_path_rate=0.4
+        # depths = [3, 3, 27, 3]
+        depths = [1,1,3,1]
+
+        layer_scale_init_value=1.0
+        dp_rates=[x.item() for x in torch.linspace(0, drop_path_rate, sum(depths))] 
+        cur = 0
+        for i in range(4):
+            stage = nn.Sequential(
+                *[convnext_Block(dim=dims[i], drop_path=dp_rates[cur + j], 
+                layer_scale_init_value=layer_scale_init_value) for j in range(depths[i])]
+            )
+            self.stages.append(stage)
+            cur += depths[i]
+
+    def forward(self, x):
+        for i in range(4):
+            x = self.downsample_layers[i](x)
+            x = self.stages[i](x)
+        return x
+
+# class ShapePropEncoder(nn.Module):
+#     def __init__(self, in_channels, latent_dim):
+#         super(ShapePropEncoder, self).__init__()
+#         self.preEncoder = nn.Sequential(nn.Conv2d(in_channels, latent_dim, kernel_size=1, stride=1),
+#                     LayerNorm(latent_dim, eps=1e-6, data_format="channels_first"))
+#         # self.encoder1 = nn.Conv2d(latent_dim, latent_dim, kernel_size=7, padding=3, groups=latent_dim),
+#         # self.encoder2 = nn.Sequential(
+#         #     LayerNorm(latent_dim, eps=1e-6),
+#         #     nn.Linear(latent_dim, 4 * latent_dim),
+#         #     nn.GELU(),
+#         #     nn.Linear(4 * latent_dim, latent_dim),
+#         # )
+#         self.depth = 2
+#         self.Encoder = nn.Sequential(
+#             *[EncoderBlock(latent_dim) for i in range(self.depth)]
+#         )
+
+#     def forward(self, x):
+#         embedding = self.preEncoder(x)
+#         for i in range(self.depth):
+#             embedding = self.Encoder[i](embedding)
+#         return embedding
 
 class MessagePassing(nn.Module):
-    def __init__(self, k=3, max_step=3, sym_norm=False):
+    def __init__(self, latent_dim, k=3, max_step=6, sym_norm=False):
         super(MessagePassing, self).__init__()
         self.k = k
         self.size = k * k
@@ -956,6 +1094,7 @@ class MessagePassing(nn.Module):
         eps = 1e-5
         n, c, h, w = input.size()
         wc = weight.shape[1] // self.size
+
         weight = weight.view(n, wc, self.size, h * w)
         if self.sym_norm:
             # symmetric normalization D^(-1/2)AD^(-1/2)
@@ -969,7 +1108,7 @@ class MessagePassing(nn.Module):
         for i in range(max(h, w) if self.max_step < 0 else self.max_step):
             x = F.unfold(x, kernel_size=self.k, padding=1).view(n, c, self.size, h * w)
             x = (x * norm_weight).sum(2).view(n, c, h, w)
-        return x
+        return x 
 
 class ShapePropDecoder(nn.Module):
     def __init__(self, out_dim, latent_dim):
@@ -982,50 +1121,59 @@ class ShapePropDecoder(nn.Module):
             nn.ReLU(True),
             nn.Conv2d(latent_dim, latent_dim, kernel_size=3, stride=1, padding=dilation, dilation=dilation),
             nn.ReLU(True),
-
-            
             nn.Conv2d(latent_dim, out_dim, kernel_size=3, stride=1, padding=dilation, dilation=dilation),
+            # nn.Conv2d(latent_dim, out_dim, kernel_size=3) # depthwise conv
         )
-
     def forward(self, embedding):
         x = self.decoder(embedding)
         return x
 
-class Depth_prompt(nn.Module):
-    def __init__(self, scale_factor, input_dim, embed_dim, depth, win_size, fusion=False):
-        super(Depth_prompt, self).__init__()
+class prompt_encoder(nn.Module):
+    def __init__(self, scale_factor, embed_dim, depth, fusion=False):
+        super(prompt_encoder, self).__init__()
         self.scale_factor = 4#scale_factor
         self.embed_dim = embed_dim
         self.depth = depth
-        self.input_dim = embed_dim#input_dim
 
-        self.shared_mlp = nn.Linear(self.embed_dim//self.scale_factor, 1)#self.input_dim//self.scale_factor, self.embed_dim)
-        self.embedding_generator = nn.Linear(self.input_dim, self.input_dim//self.scale_factor)
-        self.depth_adapter = nn.Sequential(
-            nn.Linear(1, self.embed_dim//self.scale_factor)#self.input_dim//self.scale_factor)
-        )
+        # self.shared_conv = nn.Conv2d(self.embed_dim//self.scale_factor, self.embed_dim, kernel_size=3,padding=1)
+        # self.depth_adapter = nn.Sequential(
+        #     nn.Conv2d(1, self.embed_dim//self.scale_factor, kernel_size=3, padding=1)
+        # )
+        latent_dim = 48
+        # for i in range(self.depth):
+        #     lightweight_mlp = nn.Sequential(
+        #         # nn.GELU(),
+        #         nn.Conv2d(self.embed_dim//self.scale_factor,self.embed_dim//self.scale_factor, kernel_size=3, padding=1),#self.input_dim//self.scale_factor, self.input_dim//self.scale_factor),
+        #         nn.ReLU(),
+        #     )
+        #     setattr(self, 'lightweight_mlp_{}'.format(str(i)), lightweight_mlp)
+
+        # propagation model
+        self.propagation_weight_regressor = ShapePropWeightRegressor(3, latent_dim)
+        # self.encoder0 = ShapePropEncoder(4, latent_dim//3)
+        self.encoder1 = ShapePropEncoder(1, latent_dim//2)
+        self.encoder2 = ShapePropEncoder(3, latent_dim//2)
+
+        self.message_passing = MessagePassing(latent_dim, sym_norm=False)
+
+        self.freq_nums = 0.1
         
-        # self.embedding_generator = nn.Linear(self.input_dim, self.input_dim//self.scale_factor)
-        self.fusion = fusion
-        for i in range(self.depth):
-            lightweight_mlp = nn.Sequential(
-                # nn.GELU(),
-                nn.Linear(self.embed_dim//self.scale_factor,self.embed_dim//self.scale_factor),#self.input_dim//self.scale_factor, self.input_dim//self.scale_factor),
-                nn.GELU(),
-            )
-            setattr(self, 'lightweight_mlp_{}'.format(str(i)), lightweight_mlp)
-            # if self.fusion == True:
-            #     cross = WindowFusion(self.embed_dim//self.scale_factor, window_size=(win_size, win_size))
-            #     setattr(self, 'cross_{}'.format(str(i)), cross)
-        # self.cross = WindowFusion(self.embed_dim//self.scale_factor, window_size=(win_size, win_size))
+    def fft(self, x, rate):
+        # the smaller rate, the smoother; the larger rate, the darker
+        # rate = 4, 8, 16, 32
+        mask = torch.zeros(x.shape).cuda()
+        w, h = x.shape[-2:]
+        line = int((w * h * rate) ** .5 // 2)
+        mask[:, :, w//2-line:w//2+line, h//2-line:h//2+line] = 1
+        fft = torch.fft.fftshift(torch.fft.fft2(x, norm="forward"))
+        fft = fft * (1 - mask)
+        fr = fft.real
+        fi = fft.imag
+        fft_hires = torch.fft.ifftshift(torch.complex(fr, fi))
+        inv = torch.fft.ifft2(fft_hires, norm="forward").real
+        inv = torch.abs(inv)
+        return inv   
 
-
-        # # propagation model
-        # latent_dim = self.input_dim//self.scale_factor
-        # self.propagation_weight_regressor = ShapePropWeightRegressor(embed_dim, latent_dim)
-        # self.encoder = ShapePropEncoder(1, latent_dim)
-        # self.message_passing = MessagePassing(sym_norm=False)
-        # self.decoder = ShapePropDecoder(embed_dim//self.scale_factor, latent_dim)
 
     def init_embeddings(self, x):
         x = x.permute(0,3,1,2).contiguous()
@@ -1034,40 +1182,417 @@ class Depth_prompt(nn.Module):
         return self.embedding_generator(x)
 
 
-    def forward(self, depth, cues, cross=False):
-        N, C, H, W = depth.shape
-        # depth_feature = depth.view(N, C, H*W).permute(0, 2, 1)
-        # depth_feature = self.embedding_generator(depth_feature)
-        N, C, H, W = cues.shape
-        ori_cues= cues
+    def forward(self, image, cues, cross=False):
+
+        H = 12
+        x = F.interpolate(image, size=([H,H]), mode='bilinear')
+        # cues = F.interpolate(cues, size=([H,H]), mode='bilinear')
+
+
+        # x = self.fft(x, self.freq_nums)
+
+        # x = self.prompt_generator(x)#.flatten(2).permute(0, 2, 1)
         prompts = []
 
 
-        # # propagation
-        # weights = self.propagation_weight_regressor(depth)
-        # saliency = ori_cues
-        # embedding = self.encoder(saliency)
+        # propagation  
+        weights = self.propagation_weight_regressor(x)
+        # embedding0 = self.encoder0(torch.cat([cues, image], dim=1))
+        embedding1 = self.encoder1(cues)
+        embedding2 = self.encoder2(image)
+        embedding = torch.cat([embedding1,embedding2],dim=1)
+        embedding = self.message_passing(embedding, weights)
+        # embedding = self.encoder(torch.cat([cues, image], dim=1))
         # embedding = self.message_passing(embedding, weights)
-        # shape_activation = self.decoder(embedding); cues = shape_activation
-
         
-        # prompt generating
-        cues = cues.flatten(2).permute(0, 2, 1)
-        if self.fusion == True:
-            adapted_cues = self.depth_adapter(cues)
-            fused = adapted_cues#+depth_feature#
-        for i in range(self.depth):
-            lightweight_mlp = getattr(self, 'lightweight_mlp_{}'.format(str(i)))
-            prompt = lightweight_mlp(fused) #* adapted_cues + adapted_cues
-            prompts.append(self.shared_mlp(prompt)+cues)
 
-        return prompts  
+        return embedding
+
+class prompt_decoder(nn.Module):
+    def __init__(self, scale_factor, embed_dim, depth, fusion=False):
+        super(prompt_decoder, self).__init__()
+        self.depth = depth
+        latent_dim=48
+        # for i in range(depth):
+        self.decoder = ShapePropDecoder(embed_dim, latent_dim)
+            # setattr(self, 'decoder_{}'.format(str(i)), decoder)
+
+    def forward(self, embedding, cross=False):
+        # adapter
+        prompts=[]
+        for i in range(self.depth):
+            # decoder = getattr(self, 'decoder_{}'.format(str(i)))
+            prompt = self.decoder(embedding)
+            prompt = prompt#torch.cat((torch.zeros(B,1,C).cuda(), prompt.flatten(2).permute(0,2,1)), dim=1)
+            prompts.append(prompt)
+        return prompts 
+    
+
+
+
+
+
+
+
+__all__ = ['Res2Net', 'res2net50_v1b', 'res2net101_v1b']
+
+
+model_urls = {
+    'res2net50_v1b_26w_4s': 'https://shanghuagao.oss-cn-beijing.aliyuncs.com/res2net/res2net50_v1b_26w_4s-3cf99910.pth',
+    'res2net101_v1b_26w_4s': 'https://shanghuagao.oss-cn-beijing.aliyuncs.com/res2net/res2net101_v1b_26w_4s-0812c246.pth',
+}
+
+
+class Bottle2neck(nn.Module):
+    expansion = 4
+
+    def __init__(self, inplanes, planes, stride=1, downsample=None, baseWidth=26, scale = 4, stype='normal'):
+        """ Constructor
+        Args:
+            inplanes: input channel dimensionality
+            planes: output channel dimensionality
+            stride: conv stride. Replaces pooling layer.
+            downsample: None when stride = 1
+            baseWidth: basic width of conv3x3
+            scale: number of scale.
+            type: 'normal': normal set. 'stage': first block of a new stage.
+        """
+        super(Bottle2neck, self).__init__()
+
+        width = int(math.floor(planes * (baseWidth/64.0)))
+        self.conv1 = nn.Conv2d(inplanes, width*scale, kernel_size=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(width*scale)
+        
+        if scale == 1:
+          self.nums = 1
+        else:
+          self.nums = scale -1
+        if stype == 'stage':
+            self.pool = nn.AvgPool2d(kernel_size=3, stride = stride, padding=1)
+        convs = []
+        bns = []
+        for i in range(self.nums):
+          convs.append(nn.Conv2d(width, width, kernel_size=3, stride = stride, padding=1, bias=False))
+          bns.append(nn.BatchNorm2d(width))
+        self.convs = nn.ModuleList(convs)
+        self.bns = nn.ModuleList(bns)
+
+        self.conv3 = nn.Conv2d(width*scale, planes * self.expansion, kernel_size=1, bias=False)
+        self.bn3 = nn.BatchNorm2d(planes * self.expansion)
+
+        self.relu = nn.ReLU(inplace=True)
+        self.downsample = downsample
+        self.stype = stype
+        self.scale = scale
+        self.width  = width
+
+    def forward(self, x):
+        residual = x
+
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+
+        spx = torch.split(out, self.width, 1)
+        for i in range(self.nums):
+          if i==0 or self.stype=='stage':
+            sp = spx[i]
+          else:
+            sp = sp + spx[i]
+          sp = self.convs[i](sp)
+          sp = self.relu(self.bns[i](sp))
+          if i==0:
+            out = sp
+          else:
+            out = torch.cat((out, sp), 1)
+        if self.scale != 1 and self.stype=='normal':
+          out = torch.cat((out, spx[self.nums]),1)
+        elif self.scale != 1 and self.stype=='stage':
+          out = torch.cat((out, self.pool(spx[self.nums])),1)
+
+        out = self.conv3(out)
+        out = self.bn3(out)
+
+        if self.downsample is not None:
+            residual = self.downsample(x)
+
+        out += residual
+        out = self.relu(out)
+
+        return out
+
+
+class Res2Net(nn.Module):
+
+    def __init__(self, block, layers, baseWidth = 26, scale = 4, num_classes=1000):
+        self.inplanes = 64
+        super(Res2Net, self).__init__()
+        self.baseWidth = baseWidth
+        self.scale = scale
+        self.conv1 = nn.Sequential(
+            nn.Conv2d(3, 32, 3, 2, 1, bias=False),
+            nn.BatchNorm2d(32),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(32, 32, 3, 1, 1, bias=False),
+            nn.BatchNorm2d(32),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(32, 64, 3, 1, 1, bias=False)
+        )
+        self.bn1 = nn.BatchNorm2d(64)
+        self.relu = nn.ReLU()
+        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        self.layer1 = self._make_layer(block, 64, layers[0])
+        self.layer2 = self._make_layer(block, 128, layers[1], stride=2)
+        self.layer3 = self._make_layer(block, 256, layers[2], stride=2)
+        self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
+        self.avgpool = nn.AdaptiveAvgPool2d(1)
+        self.fc = nn.Linear(512 * block.expansion, num_classes)
+
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+
+    def _make_layer(self, block, planes, blocks, stride=1):
+        downsample = None
+        if stride != 1 or self.inplanes != planes * block.expansion:
+            downsample = nn.Sequential(
+                nn.AvgPool2d(kernel_size=stride, stride=stride, 
+                    ceil_mode=True, count_include_pad=False),
+                nn.Conv2d(self.inplanes, planes * block.expansion, 
+                    kernel_size=1, stride=1, bias=False),
+                nn.BatchNorm2d(planes * block.expansion),
+            )
+
+        layers = []
+        layers.append(block(self.inplanes, planes, stride, downsample=downsample, 
+                        stype='stage', baseWidth = self.baseWidth, scale=self.scale))
+        self.inplanes = planes * block.expansion
+        for i in range(1, blocks):
+            layers.append(block(self.inplanes, planes, baseWidth = self.baseWidth, scale=self.scale))
+
+        return nn.Sequential(*layers)
+
+    def forward(self, x):
+        
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+        x0 = self.maxpool(x)
+        
+
+        x1 = self.layer1(x0)
+        x2 = self.layer2(x1)
+        x3 = self.layer3(x2)
+        x4 = self.layer4(x3)
+
+        x5 = self.avgpool(x4)
+        x6 = x5.view(x5.size(0), -1)
+        x7 = self.fc(x6)
+
+        return x7
+
+
+
+class Res2Net_Ours(nn.Module):
+
+    def __init__(self, block, layers, baseWidth = 26, scale = 4, num_classes=1000):
+        self.inplanes = 64
+        super(Res2Net_Ours, self).__init__()
+        
+        self.baseWidth = baseWidth
+        self.scale = scale
+        self.conv1 = nn.Sequential(
+            nn.Conv2d(3, 32, 3, 2, 1, bias=False),
+            nn.BatchNorm2d(32),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(32, 32, 3, 1, 1, bias=False),
+            nn.BatchNorm2d(32),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(32, 64, 3, 1, 1, bias=False)
+        )
+        self.bn1 = nn.BatchNorm2d(64)
+        self.relu = nn.ReLU()
+        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        self.layer1 = self._make_layer(block, 64, layers[0])
+        self.layer2 = self._make_layer(block, 128, layers[1], stride=2)
+        self.layer3 = self._make_layer(block, 256, layers[2], stride=2)
+        self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
+       
+
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+
+    def _make_layer(self, block, planes, blocks, stride=1):
+        downsample = None
+        if stride != 1 or self.inplanes != planes * block.expansion:
+            downsample = nn.Sequential(
+                nn.AvgPool2d(kernel_size=stride, stride=stride, 
+                    ceil_mode=True, count_include_pad=False),
+                nn.Conv2d(self.inplanes, planes * block.expansion, 
+                    kernel_size=1, stride=1, bias=False),
+                nn.BatchNorm2d(planes * block.expansion),
+            )
+
+        layers = []
+        layers.append(block(self.inplanes, planes, stride, downsample=downsample, 
+                        stype='stage', baseWidth = self.baseWidth, scale=self.scale))
+        self.inplanes = planes * block.expansion
+        for i in range(1, blocks):
+            layers.append(block(self.inplanes, planes, baseWidth = self.baseWidth, scale=self.scale))
+
+        return nn.Sequential(*layers)
+
+    def forward(self, x):
+        
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+        x0 = self.maxpool(x)
+        
+
+        x1 = self.layer1(x0)
+        x2 = self.layer2(x1)
+        x3 = self.layer3(x2)
+        x4 = self.layer4(x3)
+
+
+        return x0,x1,x2,x3,x4
+    
+    
+
+def res2net50_v1b(pretrained=False, **kwargs):
+    """Constructs a Res2Net-50_v1b model.
+    Res2Net-50 refers to the Res2Net-50_v1b_26w_4s.
+    Args:
+        pretrained (bool): If True, returns a model pre-trained on ImageNet
+    """
+    model = Res2Net(Bottle2neck, [3, 4, 6, 3], baseWidth = 26, scale = 4, **kwargs)
+    if pretrained:
+        model.load_state_dict(model_zoo.load_url(model_urls['res2net50_v1b_26w_4s'],map_location='cpu'))
+    return model
+
+def res2net101_v1b(pretrained=False, **kwargs):
+    """Constructs a Res2Net-50_v1b_26w_4s model.
+    Args:
+        pretrained (bool): If True, returns a model pre-trained on ImageNet
+    """
+    model = Res2Net(Bottle2neck, [3, 4, 23, 3], baseWidth = 26, scale = 4, **kwargs)
+    if pretrained:
+        model.load_state_dict(model_zoo.load_url(model_urls['res2net101_v1b_26w_4s']))
+    return model
+
+
+
+def res2net50_v1b_Ours(pretrained=False, **kwargs):
+    """Constructs a Res2Net-50_v1b model.
+    Res2Net-50 refers to the Res2Net-50_v1b_26w_4s.
+    Args:
+        pretrained (bool): If True, returns a model pre-trained on ImageNet
+    """
+    model = Res2Net_Ours(Bottle2neck, [3, 4, 6, 3], baseWidth = 26, scale = 4, **kwargs)
+    if pretrained:
+        model.load_state_dict(model_zoo.load_url(model_urls['res2net50_v1b_26w_4s']))
+    return model
+
+def res2net101_v1b_Ours(pretrained=False, **kwargs):
+    """Constructs a Res2Net-50_v1b_26w_4s model.
+    Args:
+        pretrained (bool): If True, returns a model pre-trained on ImageNet
+    """
+    model = Res2Net_Ours(Bottle2neck, [3, 4, 23, 3], baseWidth = 26, scale = 4, **kwargs)
+    if pretrained:
+        model.load_state_dict(model_zoo.load_url(model_urls['res2net101_v1b_26w_4s']))
+    return model
+
+
+
+def res2net50_v1b_26w_4s(pretrained=False, **kwargs):
+    """Constructs a Res2Net-50_v1b_26w_4s model.
+    Args:
+        pretrained (bool): If True, returns a model pre-trained on ImageNet
+    """
+    model = Res2Net(Bottle2neck, [3, 4, 6, 3], baseWidth = 26, scale = 4, **kwargs)
+    if pretrained:
+        model.load_state_dict(model_zoo.load_url(model_urls['res2net50_v1b_26w_4s'],map_location='cpu'))
+    return model
+
+def res2net101_v1b_26w_4s(pretrained=False, **kwargs):
+    """Constructs a Res2Net-50_v1b_26w_4s model.
+    Args:
+        pretrained (bool): If True, returns a model pre-trained on ImageNet
+    """
+    model = Res2Net(Bottle2neck, [3, 4, 23, 3], baseWidth = 26, scale = 4, **kwargs)
+    if pretrained:
+        model.load_state_dict(model_zoo.load_url(model_urls['res2net101_v1b_26w_4s']))
+    return model
+
+def res2net152_v1b_26w_4s(pretrained=False, **kwargs):
+    """Constructs a Res2Net-50_v1b_26w_4s model.
+    Args:
+        pretrained (bool): If True, returns a model pre-trained on ImageNet
+    """
+    model = Res2Net(Bottle2neck, [3, 8, 36, 3], baseWidth = 26, scale = 4, **kwargs)
+    if pretrained:
+        model.load_state_dict(model_zoo.load_url(model_urls['res2net152_v1b_26w_4s']))
+    return model
+
+
+
+   
+def Res2Net_model(ind=50):
+    
+    if ind == 50:
+        model_base = res2net50_v1b(pretrained=True)
+        model      = res2net50_v1b_Ours()
+
+    if ind == 101:
+        model_base = res2net101_v1b(pretrained=True)
+        model      = res2net101_v1b_Ours()
+        
+        
+    pretrained_dict = model_base.state_dict()
+    model_dict      = model.state_dict()
+    
+    pretrained_dict =  {k: v for k, v in pretrained_dict.items() if k in model_dict}
+    
+    model_dict.update(pretrained_dict)
+    model.load_state_dict(model_dict)
+    
+    return model
+
+
+
+class BasicConv2d(nn.Module):
+    def __init__(self, in_planes, out_planes, kernel_size, stride=1, padding=0, dilation=1):
+        super(BasicConv2d, self).__init__()
+        self.conv = nn.Conv2d(in_planes, out_planes,
+                              kernel_size=kernel_size, stride=stride,
+                              padding=padding, dilation=dilation, bias=False)
+        self.bn = nn.BatchNorm2d(out_planes)
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, x):
+        x = self.conv(x)
+        x = self.bn(x)
+        return x
+
+
+
+
+
 
 class PyramidVisionTransformerImpr(nn.Module):
     def __init__(self, img_size=224, patch_size=16, in_chans=3, num_classes=1000, embed_dims=[64, 128, 256, 512],
                  num_heads=[1, 2, 4, 8], mlp_ratios=[4, 4, 4, 4], qkv_bias=False, qk_scale=None, drop_rate=0.,
                  attn_drop_rate=0., drop_path_rate=0., norm_layer=nn.LayerNorm,
-                 depths=[3, 4, 6, 3], sr_ratios=[8, 4, 2, 1], win_size=10):
+                 depths=[3, 4, 6, 3], sr_ratios=[8, 4, 2, 1]):
         super().__init__()
         self.num_classes = num_classes
         self.depths = depths
@@ -1116,36 +1641,32 @@ class PyramidVisionTransformerImpr(nn.Module):
             for i in range(depths[3])])
         self.norm4 = norm_layer(embed_dims[3])
 
-        # depth prompt
-        self.dino_dim = 768#768
-        self.scale_factor = 4
-        win_size=22
-        self.depth_generator = nn.ModuleList([
-            Depth_prompt(self.scale_factor, self.dino_dim, embed_dims[0], self.depths[0], win_size, True),
-            Depth_prompt(self.scale_factor, self.dino_dim, embed_dims[1], self.depths[1], win_size, True),
-            Depth_prompt(self.scale_factor, self.dino_dim, embed_dims[2], self.depths[2], win_size, True),
-            Depth_prompt(self.scale_factor, self.dino_dim, embed_dims[3], self.depths[3], win_size, True),
-            ])
-        self.cross_size = 44
+        # # for texture diffuser
+        # self.scale_factor = 4
+        # self.prompt_encoder = prompt_encoder(self.scale_factor, embed_dims, depths, True) 
+        # self.prompt_decoder = nn.Sequential(*[prompt_decoder(self.scale_factor, embed_dims[i], depths[i], True) for i in range(len(depths))])
 
-        #propagation
-        latent_dim = 24
-        for i in range(4):
-            propagation_weight_regressor = ShapePropWeightRegressor(embed_dims[i], latent_dim)
-            setattr(self, 'propagation_weight_regressor_{}'.format(str(i)), propagation_weight_regressor)
 
-            encoder = ShapePropEncoder(1, latent_dim)#embed_dims[i], latent_dim)
-            setattr(self, 'encoder_{}'.format(str(i)), encoder)
+        ###############################################
+        #  𝐎𝐛𝐣𝐞𝐜𝐭 𝐏𝐨𝐩𝐩𝐢𝐧𝐠 𝐍𝐞𝐭𝐰𝐨𝐫𝐤 #
+        ###############################################
+        self.relu = nn.ReLU(inplace=True)
+        self.depth_upsample_2 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+        self.depth_upsample_4 = nn.Upsample(scale_factor=4, mode='bilinear', align_corners=True)
+        self.layer_cat = nn.Conv2d(4, 3, kernel_size=1)
+        self.layer_deps = Res2Net_model(50)
+        self.depths_conv_4 = nn.Sequential(BasicConv2d(2048, 1024, 3, padding=1), self.relu)
+        self.depths_conv_3 = nn.Sequential(BasicConv2d(1024, 512, 3, padding=1), self.relu)
+        self.depths_conv_2 = nn.Sequential(BasicConv2d(512, 256, 3, padding=1), self.relu)
+        self.depths_conv_1 = nn.Sequential(BasicConv2d(256, 64, 3, padding=1), self.relu)
+        self.depths_conv_0 = nn.Sequential(BasicConv2d(64, 1, 3, padding=1), self.relu)  
+        self.adapter = nn.Sequential(*[nn.Conv2d(1, embed_dims[i], 1) for i in range(len(depths))])
 
-            message_passing = MessagePassing(sym_norm=False)
-            setattr(self, 'message_passing_{}'.format(str(i)), message_passing)
-
-            decoder = ShapePropDecoder(embed_dims[i], latent_dim)
-            setattr(self, 'decoder_{}'.format(str(i)), decoder)
 
 
         self.apply(self._init_weights)
         self.batch = 0
+
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
             trunc_normal_(m.weight, std=.02)
@@ -1200,97 +1721,66 @@ class PyramidVisionTransformerImpr(nn.Module):
 
 
 
-    def forward_features(self, x, pred_normal):
+    def forward_features(self, x, depth):
         self.batch += 1
 
         B = x.shape[0]
         outs = []
 
         # stage 1
+        image=x
+
+        ###############################################
+        #  𝐎𝐛𝐣𝐞𝐜𝐭 𝐏𝐨𝐩𝐩𝐢𝐧𝐠 𝐍𝐞𝐭𝐰𝐨𝐫𝐤 #
+        ###############################################
+        rgb_depth = self.layer_cat(torch.cat([depth,x],dim=1))
+        deps_0, deps_1, deps_2, deps_3, deps_4 =  self.layer_deps(rgb_depth)
+        x4 =  self.depths_conv_4( self.depth_upsample_2(deps_4)) + deps_3
+        x3 =  self.depths_conv_3( self.depth_upsample_2(x4))  + deps_2
+        x2 =  self.depths_conv_2( self.depth_upsample_2(x3))  + deps_1
+        x1 =  self.depths_conv_1(x2)  + deps_0
+        x0_1 =  self.depths_conv_0(x1)
+        base_prompt =  self.depth_upsample_4(x0_1)
+
+
         x, H, W = self.patch_embed1(x)
 
-        depth = F.interpolate(pred_normal, size=(self.cross_size, self.cross_size), mode='bilinear')
-
+        # depth = F.interpolate(pred_normal, size=(88, 88), mode='bilinear')
         B,N,C = x.shape
-        reshape_x = F.interpolate(x.permute(0,2,1).reshape(B,C,H,W), size=(self.cross_size, self.cross_size), mode='bilinear')
-        depth = self.depth_generator[0](reshape_x, depth)
-
-        weights = self.propagation_weight_regressor_0(reshape_x)
-
+        prompt  = self.adapter[0](base_prompt)
+        prompt = F.interpolate(prompt, size=(H,W), mode='bilinear').flatten(2).permute(0,2,1).reshape(x.shape)
         for i, blk in enumerate(self.block1):
-            
-            embedding = self.encoder_0(depth[i].permute(0,2,1).reshape([B,1,self.cross_size,self.cross_size]))
-            embedding = self.message_passing_0(embedding, weights)
-            depth[i] = self.decoder_0(embedding)
-            depth[i] = F.interpolate(depth[i], size=(H,W), mode='bilinear').flatten(2).permute(0,2,1)
-
-            x = blk(x+depth[i], H, W) #10, 176^2, 64
+            x = blk(x+prompt, H, W)#+depth[i], H, W) #10, 176^2, 64
         x = self.norm1(x)
         x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
         outs.append(x)
 
         # stage 2
-        x, H, W = self.patch_embed2(x)
-
-        depth = F.interpolate(pred_normal, size=(self.cross_size,self.cross_size), mode='bilinear')
-        B,N,C = x.shape
-        reshape_x = F.interpolate(x.permute(0,2,1).reshape(B,C,H,W), size=(self.cross_size,self.cross_size), mode='bilinear')
-        depth = self.depth_generator[1](reshape_x, depth)
-        
-        weights = self.propagation_weight_regressor_1(reshape_x)
-
+        x, H, W = self.patch_embed2(x)       
+        prompt  = self.adapter[1](base_prompt)
+        prompt = F.interpolate(prompt, size=(H,W), mode='bilinear').flatten(2).permute(0,2,1).reshape(x.shape)
         for i, blk in enumerate(self.block2):
-            
-            embedding = self.encoder_1(depth[i].permute(0,2,1).reshape([B,1,self.cross_size,self.cross_size]))
-            embedding = self.message_passing_1(embedding, weights)
-            depth[i] = self.decoder_1(embedding) 
-            depth[i] = F.interpolate(depth[i], size=(H,W), mode='bilinear').flatten(2).permute(0,2,1)
-
-            x = blk(x+depth[i], H, W) #10, 88^2, 128
+            x = blk(x+prompt, H, W)#+depth[i], H, W) #10, 176^2, 64
         x = self.norm2(x)
         x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
         outs.append(x)
 
         # stage 3
         x, H, W = self.patch_embed3(x)
-
-        depth = F.interpolate(pred_normal, size=(self.cross_size,self.cross_size), mode='bilinear')
-        B,N,C = x.shape
-        reshape_x = F.interpolate(x.permute(0,2,1).reshape(B,C,H,W), size=(self.cross_size,self.cross_size), mode='bilinear')
-        depth = self.depth_generator[2](reshape_x, depth)
-
-        weights = self.propagation_weight_regressor_2(reshape_x)
-
+        prompt  = self.adapter[2](base_prompt)
+        prompt = F.interpolate(prompt, size=(H,W), mode='bilinear').flatten(2).permute(0,2,1).reshape(x.shape)
         for i, blk in enumerate(self.block3):
-            
-            embedding = self.encoder_2(depth[i].permute(0,2,1).reshape([B,1,self.cross_size,self.cross_size]))
-            embedding = self.message_passing_2(embedding, weights)
-            depth[i] = self.decoder_2(embedding) 
-            depth[i] = F.interpolate(depth[i], size=(H,W), mode='bilinear').flatten(2).permute(0,2,1)
-
-            x = blk(x+depth[i], H, W) #10, 44^2, 320
+            x = blk(x+prompt, H, W)#+depth[i], H, W) #10, 176^2, 64
         x = self.norm3(x)
         x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
         outs.append(x)
 
         # stage 4
         x, H, W = self.patch_embed4(x)
-
-        depth = F.interpolate(pred_normal, size=(self.cross_size,self.cross_size), mode='bilinear')
-        B,N,C = x.shape
-        reshape_x = F.interpolate(x.permute(0,2,1).reshape(B,C,H,W), size=(self.cross_size,self.cross_size), mode='bilinear')
-        depth = self.depth_generator[3](reshape_x, depth)
-        
-        weights = self.propagation_weight_regressor_3(reshape_x)
-
+        prompt  = self.adapter[3](base_prompt)
+        prompt = F.interpolate(prompt, size=(H,W), mode='bilinear').flatten(2).permute(0,2,1).reshape(x.shape)
         for i, blk in enumerate(self.block4):
-            
-            embedding = self.encoder_3(depth[i].permute(0,2,1).reshape([B,1,self.cross_size,self.cross_size]))
-            embedding = self.message_passing_3(embedding, weights)
-            depth[i] = self.decoder_3(embedding) 
-            depth[i] = F.interpolate(depth[i], size=(H,W), mode='bilinear').flatten(2).permute(0,2,1)
-
-            x = blk(x+depth[i], H, W) #10, 22^2, 512
+            x = blk(x+prompt, H, W)#+depth[i], H, W) #10, 176^2, 64
         x = self.norm4(x)
         x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
         outs.append(x)
@@ -1572,7 +2062,7 @@ class pvt_v2_b2(PyramidVisionTransformerImpr):
         super(pvt_v2_b2, self).__init__(
             patch_size=4, embed_dims=[64, 128, 320, 512], num_heads=[1, 2, 5, 8], mlp_ratios=[8, 8, 4, 4],
             qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), depths=[3, 4, 6, 3], sr_ratios=[8, 4, 2, 1],
-            drop_rate=0.0, drop_path_rate=0.1, win_size=10)
+            drop_rate=0.0, drop_path_rate=0.1)
 
 @register_model
 class pvt_v2_b3(PyramidVisionTransformerImpr):

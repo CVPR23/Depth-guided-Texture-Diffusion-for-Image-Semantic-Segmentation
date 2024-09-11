@@ -33,7 +33,7 @@ import mmseg
 
 
 @export
-class newx15(BaseModel):
+class pure_hitnet(BaseModel):
     """DQnet model"""
     def __init__(self, win_size: Optional[int]=None, filter_ratio: Optional[float]=None, 
                  using_depth: Optional[bool]=None, using_sam: Optional[bool]=None,
@@ -166,7 +166,7 @@ class newx15(BaseModel):
 
     
 @export
-class newy15(Hook):
+class pure_hitnet_init(Hook):
     """Init with pretrained model"""
     priority = 'NORMAL'
 
@@ -214,17 +214,17 @@ class newy15(Hook):
         # msg = model.sam.load_state_dict(checkpoint, strict=False)
         # print(msg)
 
-    def before_val(self, runner):
-        model = runner.model.module if isinstance(runner.model, MMDistributedDataParallel) else runner.model
+    # def before_val(self, runner):
+    #     model = runner.model.module if isinstance(runner.model, MMDistributedDataParallel) else runner.model
 
-        # Load checkpoint of hitnet 
-        pretrain = 'output/iter8/epoch_80.pth'
-        checkpoint = torch.load(pretrain, map_location='cpu')
-        print("Load pre-trained checkpoint from: %s" % pretrain)
-        if 'model' in checkpoint:
-            checkpoint = checkpoint['model']
-        msg = model.load_state_dict(checkpoint['state_dict'], strict=False)
-        print(msg)
+    #     # Load checkpoint of hitnet 
+    #     pretrain = 'output/iter8/epoch_80.pth'
+    #     checkpoint = torch.load(pretrain, map_location='cpu')
+    #     print("Load pre-trained checkpoint from: %s" % pretrain)
+    #     if 'model' in checkpoint:
+    #         checkpoint = checkpoint['model']
+    #     msg = model.load_state_dict(checkpoint['state_dict'], strict=False)
+    #     print(msg)
 
 
 
@@ -945,7 +945,7 @@ class ShapePropEncoder(nn.Module):
         return embedding
 
 class MessagePassing(nn.Module):
-    def __init__(self, k=3, max_step=3, sym_norm=False):
+    def __init__(self, k=3, max_step=8, sym_norm=False):
         super(MessagePassing, self).__init__()
         self.k = k
         self.size = k * k
@@ -1224,7 +1224,7 @@ class PyramidVisionTransformerImpr(nn.Module):
             depth[i] = self.decoder_0(embedding)
             depth[i] = F.interpolate(depth[i], size=(H,W), mode='bilinear').flatten(2).permute(0,2,1)
 
-            x = blk(x+depth[i], H, W) #10, 176^2, 64
+            x = blk(x, H, W) #10, 176^2, 64
         x = self.norm1(x)
         x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
         outs.append(x)
@@ -1246,7 +1246,7 @@ class PyramidVisionTransformerImpr(nn.Module):
             depth[i] = self.decoder_1(embedding) 
             depth[i] = F.interpolate(depth[i], size=(H,W), mode='bilinear').flatten(2).permute(0,2,1)
 
-            x = blk(x+depth[i], H, W) #10, 88^2, 128
+            x = blk(x, H, W) #10, 88^2, 128
         x = self.norm2(x)
         x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
         outs.append(x)
@@ -1268,7 +1268,7 @@ class PyramidVisionTransformerImpr(nn.Module):
             depth[i] = self.decoder_2(embedding) 
             depth[i] = F.interpolate(depth[i], size=(H,W), mode='bilinear').flatten(2).permute(0,2,1)
 
-            x = blk(x+depth[i], H, W) #10, 44^2, 320
+            x = blk(x, H, W) #10, 44^2, 320
         x = self.norm3(x)
         x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
         outs.append(x)
@@ -1290,7 +1290,7 @@ class PyramidVisionTransformerImpr(nn.Module):
             depth[i] = self.decoder_3(embedding) 
             depth[i] = F.interpolate(depth[i], size=(H,W), mode='bilinear').flatten(2).permute(0,2,1)
 
-            x = blk(x+depth[i], H, W) #10, 22^2, 512
+            x = blk(x, H, W) #10, 22^2, 512
         x = self.norm4(x)
         x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
         outs.append(x)

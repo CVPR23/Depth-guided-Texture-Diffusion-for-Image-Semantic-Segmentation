@@ -11,7 +11,7 @@ class SOD_TEST(Dataset):
     """Load data for COD testing on testing set of COD10K"""
 
     def __init__(self, data_dir: str, depth_dir: str, split: str, image_size: Optional[Union[tuple, list]] = None):
-        self.trainsize =704#384
+        self.trainsize = 384#384
         if split == 'train':
             raise ValueError(f'The NLPR dataset is usually used for testing') 
         elif split == 'test' or split == 'val':
@@ -49,7 +49,7 @@ class SOD_TEST(Dataset):
         gt = self.gt_transform(gt)
         depth = self.gt_transform(Image.open(self.depth[index]).convert('L'))
         return {
-            'raw': raw,
+            'raw': self.images[index],
             'input': image, 
             'label': gt,
             'depth': depth

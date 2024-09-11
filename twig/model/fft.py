@@ -33,7 +33,7 @@ import mmseg
 
 
 @export
-class newx15(BaseModel):
+class fft(BaseModel):
     """DQnet model"""
     def __init__(self, win_size: Optional[int]=None, filter_ratio: Optional[float]=None, 
                  using_depth: Optional[bool]=None, using_sam: Optional[bool]=None,
@@ -166,7 +166,7 @@ class newx15(BaseModel):
 
     
 @export
-class newy15(Hook):
+class sod_init(Hook):
     """Init with pretrained model"""
     priority = 'NORMAL'
 
@@ -214,17 +214,17 @@ class newy15(Hook):
         # msg = model.sam.load_state_dict(checkpoint, strict=False)
         # print(msg)
 
-    def before_val(self, runner):
-        model = runner.model.module if isinstance(runner.model, MMDistributedDataParallel) else runner.model
+    # def before_val(self, runner):
+    #     model = runner.model.module if isinstance(runner.model, MMDistributedDataParallel) else runner.model
 
-        # Load checkpoint of hitnet 
-        pretrain = 'output/iter8/epoch_80.pth'
-        checkpoint = torch.load(pretrain, map_location='cpu')
-        print("Load pre-trained checkpoint from: %s" % pretrain)
-        if 'model' in checkpoint:
-            checkpoint = checkpoint['model']
-        msg = model.load_state_dict(checkpoint['state_dict'], strict=False)
-        print(msg)
+    #     # Load checkpoint of hitnet 
+    #     pretrain = 'output/fft_SOD_2/epoch_50.pth'
+    #     checkpoint = torch.load(pretrain, map_location='cpu')
+    #     print("Load pre-trained checkpoint from: %s" % pretrain)
+    #     if 'model' in checkpoint:
+    #         checkpoint = checkpoint['model']
+    #     msg = model.load_state_dict(checkpoint['state_dict'], strict=False)
+    #     print(msg)
 
 
 
@@ -945,7 +945,7 @@ class ShapePropEncoder(nn.Module):
         return embedding
 
 class MessagePassing(nn.Module):
-    def __init__(self, k=3, max_step=3, sym_norm=False):
+    def __init__(self, k=3, max_step=8, sym_norm=False):
         super(MessagePassing, self).__init__()
         self.k = k
         self.size = k * k
@@ -991,6 +991,33 @@ class ShapePropDecoder(nn.Module):
         x = self.decoder(embedding)
         return x
 
+class PatchEmbed(nn.Module):
+    """ Image to Patch Embedding
+    """
+
+    def __init__(self, img_size=224, patch_size=16, in_chans=3, embed_dim=768):
+        super().__init__()
+        img_size = to_2tuple(img_size)
+        patch_size = to_2tuple(patch_size)
+        num_patches = (img_size[1] // patch_size[1]) * \
+            (img_size[0] // patch_size[0])
+        self.img_size = img_size
+        self.patch_size = patch_size
+        self.num_patches = num_patches
+
+        self.proj = nn.Conv2d(in_chans, embed_dim,
+                              kernel_size=patch_size, stride=patch_size)
+
+    def forward(self, x):
+        B, C, H, W = x.shape
+        # FIXME look at relaxing size constraints
+        assert H == self.img_size[0] and W == self.img_size[1], \
+            f"Input image size ({H}*{W}) doesn't match model ({self.img_size[0]}*{self.img_size[1]})."
+
+        # x = F.interpolate(x, size=2*x.shape[-1], mode='bilinear', align_corners=True)
+        x = self.proj(x)
+        return x
+
 class Depth_prompt(nn.Module):
     def __init__(self, scale_factor, input_dim, embed_dim, depth, win_size, fusion=False):
         super(Depth_prompt, self).__init__()
@@ -999,33 +1026,44 @@ class Depth_prompt(nn.Module):
         self.depth = depth
         self.input_dim = embed_dim#input_dim
 
-        self.shared_mlp = nn.Linear(self.embed_dim//self.scale_factor, 1)#self.input_dim//self.scale_factor, self.embed_dim)
-        self.embedding_generator = nn.Linear(self.input_dim, self.input_dim//self.scale_factor)
-        self.depth_adapter = nn.Sequential(
-            nn.Linear(1, self.embed_dim//self.scale_factor)#self.input_dim//self.scale_factor)
-        )
-        
-        # self.embedding_generator = nn.Linear(self.input_dim, self.input_dim//self.scale_factor)
-        self.fusion = fusion
+        # self.shared_conv = nn.Conv2d(self.embed_dim//self.scale_factor, self.embed_dim, kernel_size=3,padding=1)
+        # self.depth_adapter = nn.Sequential(
+        #     nn.Conv2d(1, self.embed_dim//self.scale_factor, kernel_size=3, padding=1)
+        # )
+        latent_dim = 24
         for i in range(self.depth):
-            lightweight_mlp = nn.Sequential(
-                # nn.GELU(),
-                nn.Linear(self.embed_dim//self.scale_factor,self.embed_dim//self.scale_factor),#self.input_dim//self.scale_factor, self.input_dim//self.scale_factor),
-                nn.GELU(),
-            )
-            setattr(self, 'lightweight_mlp_{}'.format(str(i)), lightweight_mlp)
-            # if self.fusion == True:
-            #     cross = WindowFusion(self.embed_dim//self.scale_factor, window_size=(win_size, win_size))
-            #     setattr(self, 'cross_{}'.format(str(i)), cross)
-        # self.cross = WindowFusion(self.embed_dim//self.scale_factor, window_size=(win_size, win_size))
+            # encoder = ShapePropEncoder(1, latent_dim)
+            # setattr(self, f'encoder_{i}', encoder)
+            # decoder = ShapePropDecoder(embed_dim, latent_dim)
+            # setattr(self, f'decoder_{i}', decoder)
+            propagation_weight_regressor = ShapePropWeightRegressor(embed_dim, latent_dim)
+            setattr(self, f'propagation_weight_regressor_{i}', propagation_weight_regressor)
 
+        # propagation model
+        
+        self.propagation_weight_regressor = ShapePropWeightRegressor(embed_dim, latent_dim)
+        self.encoder = ShapePropEncoder(1, latent_dim)
+        self.message_passing = MessagePassing(sym_norm=False)
+        self.decoder = ShapePropDecoder(embed_dim, latent_dim)
+        self.cross_size=44
+        self.freq_nums = 0.2
 
-        # # propagation model
-        # latent_dim = self.input_dim//self.scale_factor
-        # self.propagation_weight_regressor = ShapePropWeightRegressor(embed_dim, latent_dim)
-        # self.encoder = ShapePropEncoder(1, latent_dim)
-        # self.message_passing = MessagePassing(sym_norm=False)
-        # self.decoder = ShapePropDecoder(embed_dim//self.scale_factor, latent_dim)
+    def fft(self, x, rate):
+        # the smaller rate, the smoother; the larger rate, the darker
+        # rate = 4, 8, 16, 32
+        mask = torch.zeros(x.shape).cuda()
+        w, h = x.shape[-2:]
+        line = int((w * h * rate) ** .5 // 2)
+        mask[:, :, w//2-line:w//2+line, h//2-line:h//2+line] = 1
+        fft = torch.fft.fftshift(torch.fft.fft2(x, norm="forward"))
+        fft = fft * (1 - mask)
+        fr = fft.real
+        fi = fft.imag
+        fft_hires = torch.fft.ifftshift(torch.complex(fr, fi))
+        inv = torch.fft.ifft2(fft_hires, norm="forward").real
+        inv = torch.abs(inv)
+        return inv   
+
 
     def init_embeddings(self, x):
         x = x.permute(0,3,1,2).contiguous()
@@ -1034,33 +1072,31 @@ class Depth_prompt(nn.Module):
         return self.embedding_generator(x)
 
 
-    def forward(self, depth, cues, cross=False):
-        N, C, H, W = depth.shape
-        # depth_feature = depth.view(N, C, H*W).permute(0, 2, 1)
-        # depth_feature = self.embedding_generator(depth_feature)
-        N, C, H, W = cues.shape
-        ori_cues= cues
+    def forward(self, x, cues, cross=False):
+        B, N, C = x.shape
+        H = int(math.sqrt(N))
+        x = F.interpolate(x.permute(0,2,1).reshape([B,C,H,H]), size=([self.cross_size, self.cross_size]))
+        x = self.fft(x, self.freq_nums)#.detach()
+        # x = self.prompt_generator(x)#.flatten(2).permute(0, 2, 1)
         prompts = []
 
-
-        # # propagation
-        # weights = self.propagation_weight_regressor(depth)
-        # saliency = ori_cues
-        # embedding = self.encoder(saliency)
-        # embedding = self.message_passing(embedding, weights)
-        # shape_activation = self.decoder(embedding); cues = shape_activation
-
-        
         # prompt generating
-        cues = cues.flatten(2).permute(0, 2, 1)
-        if self.fusion == True:
-            adapted_cues = self.depth_adapter(cues)
-            fused = adapted_cues#+depth_feature#
-        for i in range(self.depth):
-            lightweight_mlp = getattr(self, 'lightweight_mlp_{}'.format(str(i)))
-            prompt = lightweight_mlp(fused) #* adapted_cues + adapted_cues
-            prompts.append(self.shared_mlp(prompt)+cues)
+        ori_cues = cues.flatten(2).permute(0, 2, 1)
+        # if self.fusion == True:
+            # adapted_cues = self.depth_adapter(ori_cues)
+            # fused = adapted_cues
+        
+            # lightweight_mlp = getattr(self, 'lightweight_mlp_{}'.format(str(i)))
+            # prompt = lightweight_mlp(fused) #* adapted_cues + adapted_cues
+            # prompt = self.shared_mlp(prompt)+ori_cues
 
+            # propagation  
+        for i in range(self.depth):
+            weights = self.propagation_weight_regressor(x)
+            embedding = self.encoder(ori_cues.permute(0,2,1).reshape(B,1,self.cross_size, self.cross_size))
+            embedding = self.message_passing(embedding, weights)
+            prompt = self.decoder(embedding)
+            prompts.append(prompt)
         return prompts  
 
 class PyramidVisionTransformerImpr(nn.Module):
@@ -1128,20 +1164,20 @@ class PyramidVisionTransformerImpr(nn.Module):
             ])
         self.cross_size = 44
 
-        #propagation
-        latent_dim = 24
-        for i in range(4):
-            propagation_weight_regressor = ShapePropWeightRegressor(embed_dims[i], latent_dim)
-            setattr(self, 'propagation_weight_regressor_{}'.format(str(i)), propagation_weight_regressor)
+        # #propagation
+        # latent_dim = 24
+        # for i in range(4):
+        #     propagation_weight_regressor = ShapePropWeightRegressor(embed_dims[i], latent_dim)
+        #     setattr(self, 'propagation_weight_regressor_{}'.format(str(i)), propagation_weight_regressor)
 
-            encoder = ShapePropEncoder(1, latent_dim)#embed_dims[i], latent_dim)
-            setattr(self, 'encoder_{}'.format(str(i)), encoder)
+        #     encoder = ShapePropEncoder(1, latent_dim)#embed_dims[i], latent_dim)
+        #     setattr(self, 'encoder_{}'.format(str(i)), encoder)
 
-            message_passing = MessagePassing(sym_norm=False)
-            setattr(self, 'message_passing_{}'.format(str(i)), message_passing)
+        #     message_passing = MessagePassing(sym_norm=False)
+        #     setattr(self, 'message_passing_{}'.format(str(i)), message_passing)
 
-            decoder = ShapePropDecoder(embed_dims[i], latent_dim)
-            setattr(self, 'decoder_{}'.format(str(i)), decoder)
+        #     decoder = ShapePropDecoder(embed_dims[i], latent_dim)
+        #     setattr(self, 'decoder_{}'.format(str(i)), decoder)
 
 
         self.apply(self._init_weights)
@@ -1210,21 +1246,16 @@ class PyramidVisionTransformerImpr(nn.Module):
         x, H, W = self.patch_embed1(x)
 
         depth = F.interpolate(pred_normal, size=(self.cross_size, self.cross_size), mode='bilinear')
-
         B,N,C = x.shape
-        reshape_x = F.interpolate(x.permute(0,2,1).reshape(B,C,H,W), size=(self.cross_size, self.cross_size), mode='bilinear')
-        depth = self.depth_generator[0](reshape_x, depth)
-
-        weights = self.propagation_weight_regressor_0(reshape_x)
+        depth = self.depth_generator[0](x, depth)
 
         for i, blk in enumerate(self.block1):
             
-            embedding = self.encoder_0(depth[i].permute(0,2,1).reshape([B,1,self.cross_size,self.cross_size]))
-            embedding = self.message_passing_0(embedding, weights)
-            depth[i] = self.decoder_0(embedding)
-            depth[i] = F.interpolate(depth[i], size=(H,W), mode='bilinear').flatten(2).permute(0,2,1)
-
-            x = blk(x+depth[i], H, W) #10, 176^2, 64
+            # embedding = self.encoder_0(depth[i].permute(0,2,1).reshape([B,1,self.cross_size,self.cross_size]))
+            # embedding = self.message_passing_0(embedding, weights)
+            # depth[i] = self.decoder_0(embedding)
+            depth[i] = F.interpolate(depth[i], size=(H,W), mode='bilinear').flatten(2).permute(0,2,1).reshape(x.shape)
+            x = blk(x+depth[i], H, W)#+depth[i], H, W) #10, 176^2, 64
         x = self.norm1(x)
         x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
         outs.append(x)
@@ -1234,18 +1265,15 @@ class PyramidVisionTransformerImpr(nn.Module):
 
         depth = F.interpolate(pred_normal, size=(self.cross_size,self.cross_size), mode='bilinear')
         B,N,C = x.shape
-        reshape_x = F.interpolate(x.permute(0,2,1).reshape(B,C,H,W), size=(self.cross_size,self.cross_size), mode='bilinear')
-        depth = self.depth_generator[1](reshape_x, depth)
+        depth = self.depth_generator[1](x, depth)
         
-        weights = self.propagation_weight_regressor_1(reshape_x)
 
         for i, blk in enumerate(self.block2):
             
-            embedding = self.encoder_1(depth[i].permute(0,2,1).reshape([B,1,self.cross_size,self.cross_size]))
-            embedding = self.message_passing_1(embedding, weights)
-            depth[i] = self.decoder_1(embedding) 
-            depth[i] = F.interpolate(depth[i], size=(H,W), mode='bilinear').flatten(2).permute(0,2,1)
-
+            # embedding = self.encoder_1(depth[i].permute(0,2,1).reshape([B,1,self.cross_size,self.cross_size]))
+            # embedding = self.message_passing_1(embedding, weights)
+            # depth[i] = self.decoder_1(embedding) 
+            depth[i] = F.interpolate(depth[i], size=(H,W), mode='bilinear').flatten(2).permute(0,2,1).reshape(x.shape)
             x = blk(x+depth[i], H, W) #10, 88^2, 128
         x = self.norm2(x)
         x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
@@ -1256,19 +1284,15 @@ class PyramidVisionTransformerImpr(nn.Module):
 
         depth = F.interpolate(pred_normal, size=(self.cross_size,self.cross_size), mode='bilinear')
         B,N,C = x.shape
-        reshape_x = F.interpolate(x.permute(0,2,1).reshape(B,C,H,W), size=(self.cross_size,self.cross_size), mode='bilinear')
-        depth = self.depth_generator[2](reshape_x, depth)
-
-        weights = self.propagation_weight_regressor_2(reshape_x)
+        depth = self.depth_generator[2](x, depth)
 
         for i, blk in enumerate(self.block3):
             
-            embedding = self.encoder_2(depth[i].permute(0,2,1).reshape([B,1,self.cross_size,self.cross_size]))
-            embedding = self.message_passing_2(embedding, weights)
-            depth[i] = self.decoder_2(embedding) 
-            depth[i] = F.interpolate(depth[i], size=(H,W), mode='bilinear').flatten(2).permute(0,2,1)
-
-            x = blk(x+depth[i], H, W) #10, 44^2, 320
+            # embedding = self.encoder_2(depth[i].permute(0,2,1).reshape([B,1,self.cross_size,self.cross_size]))
+            # embedding = self.message_passing_2(embedding, weights)
+            # depth[i] = self.decoder_2(embedding) 
+            depth[i] = F.interpolate(depth[i], size=(H,W), mode='bilinear').flatten(2).permute(0,2,1).reshape(x.shape)
+            x = blk(x+depth[i], H, W)# #10, 44^2, 320
         x = self.norm3(x)
         x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
         outs.append(x)
@@ -1278,19 +1302,15 @@ class PyramidVisionTransformerImpr(nn.Module):
 
         depth = F.interpolate(pred_normal, size=(self.cross_size,self.cross_size), mode='bilinear')
         B,N,C = x.shape
-        reshape_x = F.interpolate(x.permute(0,2,1).reshape(B,C,H,W), size=(self.cross_size,self.cross_size), mode='bilinear')
-        depth = self.depth_generator[3](reshape_x, depth)
-        
-        weights = self.propagation_weight_regressor_3(reshape_x)
+        depth = self.depth_generator[3](x, depth)
 
         for i, blk in enumerate(self.block4):
             
-            embedding = self.encoder_3(depth[i].permute(0,2,1).reshape([B,1,self.cross_size,self.cross_size]))
-            embedding = self.message_passing_3(embedding, weights)
-            depth[i] = self.decoder_3(embedding) 
-            depth[i] = F.interpolate(depth[i], size=(H,W), mode='bilinear').flatten(2).permute(0,2,1)
-
-            x = blk(x+depth[i], H, W) #10, 22^2, 512
+            # embedding = self.encoder_3(depth[i].permute(0,2,1).reshape([B,1,self.cross_size,self.cross_size]))
+            # embedding = self.message_passing_3(embedding, weights)
+            # depth[i] = self.decoder_3(embedding) 
+            depth[i] = F.interpolate(depth[i], size=(H,W), mode='bilinear').flatten(2).permute(0,2,1).reshape(x.shape)
+            x = blk(x+depth[i], H, W)# #10, 22^2, 512
         x = self.norm4(x)
         x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
         outs.append(x)

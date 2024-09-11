@@ -13,7 +13,7 @@ class COD10K_CAMO_TRAIN(Dataset):
     """Load data for COD training on training set of COD10K and CAMO"""
 
     def __init__(self, data_dir: str, depth_dir: str, split: str, image_size: Optional[Union[tuple, list]] = None):
-        self.trainsize = 704#384
+        self.trainsize = 384#384
         self.cropsize = 224
         if True:#split == 'train':
             self.images = [os.path.join(data_dir, 'Imgs', f) for f in os.listdir(os.path.join(data_dir, 'Imgs'))]

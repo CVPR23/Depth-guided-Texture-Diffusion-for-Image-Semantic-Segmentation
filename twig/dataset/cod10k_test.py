@@ -11,7 +11,7 @@ class COD10K_TEST(Dataset):
     """Load data for COD testing on testing set of COD10K"""
 
     def __init__(self, data_dir: str, depth_dir: str, split: str, image_size: Optional[Union[tuple, list]] = None):
-        self.trainsize = 704#384
+        self.trainsize = 384#384
         if split == 'train':
             raise ValueError(f'The testing set of COD10K is usually used for testing') 
         elif split == 'test' or split == 'val':
@@ -21,9 +21,9 @@ class COD10K_TEST(Dataset):
             # depth_dir = '/root/autodl-tmp/sw/workspace/dqnet-depth-nest/Metric3D-main/show_dirs/convlarge.0.3_150/20230901_205947/vis/cod10k_test'
         else:
             raise NotImplementedError(f'Unsupported split {split}')           
-        self.images = sorted(self.images)
-        self.gts = sorted(self.gts)
-        self.depth = sorted(self.depth)
+        self.images = sorted(self.images)[3381:]
+        self.gts = sorted(self.gts)[3381:]
+        self.depth = sorted(self.depth)[3381:]
         self.filter_files()
 
         self.raw_transform = transforms.Compose([
@@ -50,7 +50,7 @@ class COD10K_TEST(Dataset):
         gt = self.gt_transform(gt)
         depth = self.gt_transform(Image.open(self.depth[index]).convert('L'))
         return {
-            'raw': raw,
+            'raw': self.images[index],
             'input': image, 
             'label': gt,
             'depth': depth
