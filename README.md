@@ -16,7 +16,9 @@ This repository contains the official implementation of the TCSVT journal paper 
 
 ## Dataset Preparation
 
-To run the code, you first need to download the dataset. Please download it from the following [dummy link](https://example.com/dataset) and extract the data to the `data/` directory.
+To run the code, you first need to download the dataset. Please download it from the following [link](通过网盘分享的文件：Texture_Diffusion_Dataset
+链接: https://pan.baidu.com/s/1qu4UpCG_g6BKUv73B1Rs1w?pwd=erzq 提取码: erzq 
+--来自百度网盘超级会员v6的分享) and extract the data to the `data/` directory.
 
 ```bash
 mkdir -p data
@@ -25,7 +27,9 @@ mkdir -p data
 
 ## Pretrained Weights
 
-You also need to download the pretrained weights. Place the downloaded weights into the `pretrain/` folder. Download them from the following [dummy link](https://example.com/pretrained).
+You also need to download the pretrained weights. Place the downloaded weights into the `pretrain/` folder. Download them from the following [link](通过网盘分享的文件：Texture_Diffusion_Dataset
+链接: https://pan.baidu.com/s/1qu4UpCG_g6BKUv73B1Rs1w?pwd=erzq 提取码: erzq 
+--来自百度网盘超级会员v6的分享).
 
 ```bash
 mkdir -p pretrain
